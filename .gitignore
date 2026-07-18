@@ -1,0 +1,22 @@
+runs/
+week4/runs/
+__pycache__/
+*.pyc
+*.pt
+.ipynb_checkpoints/
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+
+# Ignore PDF files
+*.pdf
+# Local development files
+work/code/.vscode/
+work/code/MUJOCO_LOG.TXT
+work/.vsode
+work/code/logs/
+work/code/wandb

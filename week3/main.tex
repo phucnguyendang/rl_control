@@ -1,0 +1,974 @@
+\documentclass{beamer}
+
+\title{Week 2 + 3: Policy Gradient Methods}
+\author{Phuc Nguyen Dang}
+\date{\today}
+
+\begin{document}
+
+\frame{\titlepage}
+
+\begin{frame}{Policy Gradient: Learn a Policy Directly}
+
+\textbf{Objective:} learn a parameterized policy
+\[
+\pi_\theta(a|s)
+\]
+by maximizing a performance measure:
+\[
+J(\theta)
+\]
+
+\vspace{0.2cm}
+
+\textbf{Gradient ascent update}
+\[
+\theta_{t+1}
+=
+\theta_t + \alpha \nabla_\theta J(\theta_t)
+\]
+
+\vspace{0.2cm}
+
+\textbf{Policy Gradient Theorem}
+\[
+\begin{aligned}
+\nabla_\theta J(\theta)
+&\propto
+\sum_s \mu_\pi(s)
+\sum_a
+\nabla_\theta \pi_\theta(a|s) Q^\pi(s,a) \\
+&=
+\sum_s \mu_\pi(s)
+\sum_a
+\pi_\theta(a|s)
+\nabla_\theta \log \pi_\theta(a|s)
+Q^\pi(s,a) \\
+&=
+\mathbb{E}_{s \sim \mu_\pi,\ a \sim \pi_\theta}
+\left[
+\nabla_\theta \log \pi_\theta(a|s) Q^\pi(s,a)
+\right].
+\end{aligned}
+\]
+\end{frame}
+
+\begin{frame}{From Policy Gradient to Algorithms}
+
+From the policy gradient theorem, the gradient can be estimated using sampled trajectories:
+
+\[
+\nabla_\theta J(\theta)
+\approx
+\mathbb{E}_t
+\left[
+\nabla_\theta \log \pi_\theta(A_t|S_t)
+\; \widehat{\Psi}_t
+\right]
+\]
+
+where \(\widehat{\Psi}_t\) measures how good the sampled action was.
+
+\vspace{0.3cm}
+
+\begin{block}{Two key questions}
+\begin{enumerate}
+    \item \textbf{How good or bad was the sampled action?}
+    \[
+    \widehat{\Psi}_t
+    =
+    G_t,\quad
+    G_t - b(S_t),\quad
+    A_t,\quad
+    \delta_t,\quad
+    \widehat{A}^{\mathrm{GAE}}_t
+    \]
+
+    \item \textbf{How strong should the policy update be?}
+    \[
+    \theta_{\text{new}}
+    \leftarrow
+    \theta_{\text{old}}
+    + \text{controlled policy update}
+    \]
+\end{enumerate}
+\end{block}
+
+\vspace{0.2cm}
+
+\begin{center}
+REINFORCE \(\rightarrow\) Baseline \(\rightarrow\) Actor-Critic / GAE
+\(\rightarrow\) TRPO \(\rightarrow\) PPO
+\end{center}
+
+\end{frame}
+\begin{frame}{REINFORCE: Policy Gradient Estimator}
+
+\small
+
+\[
+\nabla J(\theta)
+\propto
+\sum_s \mu_\gamma(s)
+\sum_a q_\pi(s,a)\nabla_\theta \pi(a|s)
+=
+\mathbb{E}_{S_t \sim \mu_\gamma}
+\left[
+\sum_a q_\pi(S_t,a)
+\nabla_\theta \pi(a|S_t,\theta)
+\right]
+\]
+
+\vspace{0.2cm}
+
+\begin{align*}
+\nabla J(\theta)
+&\propto
+\mathbb{E}_{S_t \sim \mu_\gamma}
+\left[
+\sum_a
+\pi(a|S_t,\theta)
+q_\pi(S_t,a)
+\frac{
+\nabla_\theta \pi(a|S_t,\theta)
+}{
+\pi(a|S_t,\theta)
+}
+\right]
+\tag{1}
+\\[0.15cm]
+&=
+\mathbb{E}_{S_t \sim \mu_\gamma,\ A_t \sim \pi}
+\left[
+q_\pi(S_t,A_t)
+\nabla_\theta \ln \pi(A_t|S_t,\theta)
+\right]
+\tag{2}
+\\[0.15cm]
+&=
+\mathbb{E}_{S_t \sim \mu_\gamma,\ A_t \sim \pi}
+\left[
+G_t
+\nabla_\theta \ln \pi(A_t|S_t,\theta)
+\right],
+\tag{3}
+\end{align*}
+
+\vspace{0.1cm}
+
+Because \(\mu_\gamma\) weights the state at time \(t\) by \(\gamma^t\),
+the Monte-Carlo episode update uses the factor \(\gamma^t\).
+
+\end{frame}
+
+\begin{frame}{REINFORCE: Monte-Carlo Policy-Gradient Control}
+
+\small
+
+\textbf{Goal:} learn a parameterized stochastic policy
+\[
+\pi(a|s,\theta)
+\]
+
+\vspace{0.15cm}
+
+\textbf{Input:}
+\[
+\pi(a|s,\theta), \qquad \alpha > 0
+\]
+
+\vspace{0.15cm}
+
+\textbf{Initialize:}
+\[
+\theta \in \mathbb{R}^d
+\]
+
+\vspace{0.15cm}
+
+\textbf{For each episode:}
+
+\begin{itemize}
+    \item Generate one trajectory following the current policy:
+    \[
+    S_0, A_0, R_1, \ldots, S_{T-1}, A_{T-1}, R_T
+    \]
+
+    \item For each time step \(t = 0,1,\ldots,T-1\):
+    \[
+    G_t
+    =
+    \sum_{k=t+1}^{T}
+    \gamma^{k-t-1} R_k
+    \]
+
+    \[
+    \theta
+    \leftarrow
+    \theta
+    +
+    \alpha \gamma^t G_t
+    \nabla_\theta \ln \pi(A_t|S_t,\theta)
+    \]
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}{REINFORCE with Baseline: Policy Gradient Estimator}
+
+\small
+
+From the Appendix:
+\[
+\nabla J(\theta)
+\propto
+\sum_s \mu_\gamma(s)
+\sum_a q_\pi(s,a)\nabla_\theta \pi(a|s)
+\]
+
+\vspace{0.1cm}
+
+Adding a baseline \(b(s)\) to the action-value function gives:
+\[
+\nabla J(\theta)
+\propto
+\sum_s \mu_\gamma(s)
+\sum_a
+\left(q_\pi(s,a) - b(s)\right)
+\nabla_\theta \pi(a|s)
+\]
+
+\vspace{0.1cm}
+
+As long as \(b(s)\) does not depend on \(a\), the expected value of
+the policy gradient remains unchanged:
+\[
+\sum_a b(s)\nabla_\theta \pi(a|s)
+=
+b(s)\nabla_\theta \sum_a \pi(a|s)
+=
+b(s)\nabla_\theta 1
+=
+0.
+\]
+
+\vspace{0.1cm}
+
+With the baseline, the update rule for REINFORCE becomes:
+\[
+\theta_{t+1}
+\leftarrow
+\theta_t
++
+\alpha \gamma^t
+\left(G_t - b(S_t)\right)
+\nabla_\theta \ln \pi(A_t|S_t,\theta)
+\]
+
+\end{frame}
+
+\begin{frame}{REINFORCE with Baseline: Monte-Carlo Policy-Gradient Control}
+
+\scriptsize
+
+\begin{tabular}{@{}p{0.24\linewidth}p{0.70\linewidth}@{}}
+\textbf{Natural baseline:}
+&
+\(b(S_t)=\hat{v}(S_t,w),\quad w\in\mathbb{R}^{d}\)
+\\[0.08cm]
+\textbf{Input:}
+&
+\(\pi(a|s,\theta),\quad \hat{v}(s,w),\quad
+\alpha^\theta>0,\ \alpha^w>0\)
+\\[0.08cm]
+\textbf{Initialize:}
+&
+\(\theta\in\mathbb{R}^{d'},\quad w\in\mathbb{R}^{d}\)
+\end{tabular}
+
+\vspace{0.12cm}
+
+\textbf{For each episode:}
+\begin{enumerate}
+    \item Generate one trajectory following the current policy:
+    \[
+    S_0, A_0, R_1, \ldots, S_{T-1}, A_{T-1}, R_T
+    \]
+
+    \item For each time step \(t=0,1,\ldots,T-1\):
+    \[
+    \begin{aligned}
+    G_t
+    &=
+    \sum_{k=t+1}^{T}
+    \gamma^{k-t-1} R_k,
+    &
+    \delta
+    &=
+    G_t - \hat{v}(S_t,w)
+    \end{aligned}
+    \]
+
+    \[
+    \begin{aligned}
+    w
+    &\leftarrow
+    w
+    +
+    \alpha^w \delta
+    \nabla_w \hat{v}(S_t,w),
+    \\
+    \theta
+    &\leftarrow
+    \theta
+    +
+    \alpha^\theta \gamma^t \delta
+    \nabla_\theta \ln \pi(A_t|S_t,\theta)
+    \end{aligned}
+    \]
+\end{enumerate}
+
+\end{frame}
+
+\begin{frame}{From REINFORCE with Baseline to Actor-Critic}
+
+\small
+
+\textbf{Remaining issue: still Monte-Carlo.}
+
+\vspace{0.1cm}
+
+Even with a baseline, REINFORCE still needs the return:
+\[
+G_t
+=
+\sum_{k=t+1}^{T}
+\gamma^{k-t-1}R_k
+\]
+
+\vspace{0.1cm}
+
+Thus, the return is known only after the episode finishes.
+
+\vspace{0.15cm}
+
+\begin{block}{Three practical issues}
+\begin{itemize}
+    \item The episode must finish before \(G_t\) is available.
+    \item \(G_t\) can still be noisy.
+    \item Online learning and continuing tasks become harder.
+\end{itemize}
+\end{block}
+
+\vspace{0.1cm}
+
+\[
+\text{Actor-Critic replaces } G_t
+\text{ with a bootstrapped TD target.}
+\]
+
+\end{frame}
+
+\begin{frame}{Actor-Critic: From Monte-Carlo to TD}
+
+\small
+
+TD error stands for Temporal-Difference error.
+It measures how wrong the value prediction was after observing one more step.
+
+\[
+\delta_t
+=
+R_{t+1}
++
+\gamma \hat{v}(S_{t+1},w_t)
+-
+\hat{v}(S_t,w_t)
+\]
+
+\vspace{0.1cm}
+
+Instead of using the Monte-Carlo return \(G_t\) to update the policy,
+Actor-Critic uses the one-step TD target:
+\[
+R_{t+1}
++
+\gamma \hat{v}(S_{t+1},w)
+\]
+
+\vspace{0.1cm}
+
+\begin{itemize}
+    \item If \(\hat{v}\) is accurate, the TD target estimates \(q_\pi(S_t,A_t)\).
+    \item In practice, the target is biased but usually has lower variance than \(G_t\).
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}{Actor-Critic: Actor, Critic, and Signal}
+
+\small
+
+\begin{itemize}
+    \item \textbf{Actor:} the policy \(\pi(a|s,\theta)\)
+    \item \textbf{Critic:} the state-value estimate \(\hat{v}(s,w)\)
+    \item \textbf{Signal:} the TD error
+\end{itemize}
+
+\[
+\delta
+\leftarrow
+R
++
+\gamma \hat{v}(S',w)
+-
+\hat{v}(S,w)
+\]
+
+\vspace{0.1cm}
+
+The TD error plays the role of the advantage estimate used to update both
+the critic and the actor.
+
+\[
+w
+\leftarrow
+w
++
+\alpha^w \delta
+\nabla_w \hat{v}(S,w)
+\]
+
+\[
+\theta
+\leftarrow
+\theta
++
+\alpha^\theta \delta I
+\nabla_\theta \ln \pi(A|S,\theta)
+\]
+
+where \(I=\gamma^t\) in episodic policy-gradient updates.
+
+\end{frame}
+
+\begin{frame}{Forward View: \(n\)-Step and \(\lambda\)-Return}
+
+\small
+
+The one-step return can be replaced by an \(n\)-step target:
+\[
+G_{t:t+n}
+=
+R_{t+1}
++
+\gamma R_{t+2}
++
+\cdots
++
+\gamma^{n-1}R_{t+n}
++
+\gamma^n \hat{v}(S_{t+n},w)
+\]
+
+\vspace{0.1cm}
+
+The \(\lambda\)-return is a weighted average of these \(n\)-step targets:
+\[
+G_t^\lambda
+=
+(1-\lambda)
+\sum_{n=1}^{T-t-1}
+\lambda^{n-1}G_{t:t+n}
++
+\lambda^{T-t-1}G_{t:T}
+\]
+
+\vspace{0.1cm}
+
+\[
+\lambda=0:\ \text{one-step TD target},
+\qquad
+\lambda=1:\ \text{Monte-Carlo return}
+\]
+
+Trade off: bias and variance.
+\end{frame}
+
+\begin{frame}{Forward View: Actor-Critic Update}
+
+\scriptsize
+
+For the critic, the return error is a prediction error:
+\[
+e_t^\lambda
+=
+G_t^\lambda
+-
+\hat{v}(S_t,w_t)
+\]
+
+\vspace{0.05cm}
+
+The critic is updated by semi-gradient descent:
+\[
+w_{t+1}
+=
+w_t
++
+\alpha^w e_t^\lambda
+\nabla_w \hat{v}(S_t,w_t)
+\]
+
+\[
+-\nabla_w
+\frac{1}{2}
+\left(G_t^\lambda-\hat{v}(S_t,w_t)\right)^2
+=
+e_t^\lambda \nabla_w \hat{v}(S_t,w_t)
+\]
+
+\vspace{0.05cm}
+
+For the actor, the same error acts like an advantage estimate:
+\[
+\widehat{A}_t^\lambda
+\doteq
+e_t^\lambda
+=
+G_t^\lambda
+-
+\hat{v}(S_t,w_t)
+\]
+
+The actor update is:
+\[
+\theta_{t+1}
+=
+\theta_t
++
+\alpha^\theta \gamma^t
+\widehat{A}_t^\lambda
+\nabla_\theta \ln \pi(A_t|S_t,\theta_t)
+\]
+
+\end{frame}
+
+\begin{frame}{Backward View: Eligibility Traces}
+
+\small
+
+Computing \(G_t^\lambda\) directly is the forward view because it needs
+future rewards.
+
+\vspace{0.1cm}
+
+The backward view implements the same idea online with eligibility traces:
+\[
+G_t^\lambda - \hat{v}(S_t,w)
+\approx
+\sum_{k=t}^{T-1}
+(\gamma\lambda)^{k-t}
+\delta_k
+\]
+
+\vspace{0.1cm}
+
+Critic trace:
+\[
+z_t^w
+=
+\gamma \lambda^w z_{t-1}^w
++
+\nabla_w \hat{v}(S_t,w_t)
+\]
+
+Actor trace:
+\[
+z_t^\theta
+=
+\gamma \lambda^\theta z_{t-1}^\theta
++
+I_t \nabla_\theta \ln \pi(A_t|S_t,\theta_t)
+\]
+
+\end{frame}
+
+\begin{frame}{Actor-Critic with Eligibility Traces}
+
+\scriptsize
+
+\textbf{Initialize each episode:}
+\[
+S,\qquad
+z^\theta \leftarrow \mathbf{0},
+\qquad
+z^w \leftarrow \mathbf{0},
+\qquad
+I \leftarrow 1
+\]
+
+\vspace{0.1cm}
+
+\textbf{For each step while \(S\) is not terminal:}
+\begin{itemize}
+    \item \(A \sim \pi(\cdot|S,\theta)\); take \(A\), observe \(S'\), \(R\)
+    \item
+    \[
+    \delta
+    \leftarrow
+    R
+    +
+    \gamma \hat{v}(S',w)
+    -
+    \hat{v}(S,w)
+    \]
+    \item
+    \[
+    z^w
+    \leftarrow
+    \gamma\lambda^w z^w
+    +
+    \nabla_w \hat{v}(S,w)
+    \]
+    \[
+    z^\theta
+    \leftarrow
+    \gamma\lambda^\theta z^\theta
+    +
+    I\nabla_\theta\ln\pi(A|S,\theta)
+    \]
+\end{itemize}
+
+\[
+w
+\leftarrow
+w
++
+\alpha^w \delta z^w,
+\qquad
+\theta
+\leftarrow
+\theta
++
+\alpha^\theta \delta z^\theta
+\]
+
+\[
+I \leftarrow \gamma I,
+\qquad
+S \leftarrow S'
+\]
+
+\end{frame}
+
+
+\begin{frame}{Second Question: How Strong Should the Update Be?}
+
+\small
+
+So far, the algorithms mainly answer the first question:
+\[
+\text{How good or bad was the sampled action?}
+\]
+
+\[
+G_t,\quad
+G_t-b(S_t),\quad
+\delta_t,\quad
+\widehat{A}_t^{\lambda}
+\]
+
+\vspace{0.15cm}
+
+Given an advantage estimate \(\widehat{A}_t\), the next question is:
+\[
+\text{How much should the policy } \pi_\theta \text{ change?}
+\]
+
+\begin{block}{Problem}
+Training data is sampled from the old policy
+\(\pi_{\theta_{\mathrm{old}}}\),
+but used to update the new policy \(\pi_\theta\).
+If the policy changes too much, the old data may no longer be useful.
+\end{block}
+
+\[
+\text{A controlled policy update is needed.}
+\]
+
+\end{frame}
+
+\begin{frame}{Performance Difference Between Two Policies}
+
+\small
+
+Let \(\pi\) be the old policy and \(\tilde{\pi}\) be the new policy.
+Using the advantage under the old policy:
+\[
+J(\tilde{\pi})
+=
+J(\pi)
++
+\mathbb{E}_{\tilde{\pi}}
+\left[
+\sum_{t=0}^{\infty}
+\gamma^t A^\pi(s_t,a_t)
+\right]
+\]
+
+\[
+=
+J(\pi)
++
+\sum_s
+\mu_{\tilde{\pi}}(s)
+\sum_a
+\tilde{\pi}(a|s)
+A^\pi(s,a)
+\]
+
+\vspace{0.1cm}
+
+This says:
+\[
+\text{new performance}
+=
+\text{old performance}
+\]
+\[
++
+\text{expected old-policy advantage under the new policy.}
+\]
+
+\begin{block}{Difficulty}
+\(\mu_{\tilde{\pi}}(s)\) also depends on the new policy,
+so directly optimizing this expression is hard.
+\end{block}
+
+\end{frame}
+
+\begin{frame}{Surrogate Objective: Reuse Old-Policy Data}
+
+\small
+
+To make optimization practical, approximate the new state distribution
+by the old one:
+\[
+\mu_{\tilde{\pi}}(s) \approx \mu_{\pi}(s)
+\]
+
+\[
+L^{\mathrm{CPI}}(\tilde{\pi})
+=
+J(\pi)
++
+\sum_s
+\mu_{\pi}(s)
+\sum_a
+\tilde{\pi}(a|s)
+A^\pi(s,a)
+\]
+
+\vspace{0.1cm}
+
+Rewrite it as an expectation over old-policy samples:
+\[
+\begin{aligned}
+L^{\mathrm{CPI}}(\tilde{\pi}) - J(\pi)
+&=
+\sum_s \mu_{\pi}(s)
+\sum_a
+\pi(a|s)
+\frac{\tilde{\pi}(a|s)}{\pi(a|s)}
+A^\pi(s,a)
+\\
+&=
+\mathbb{E}_{s,a\sim\pi}
+\left[
+\frac{\tilde{\pi}(a|s)}{\pi(a|s)}
+A^\pi(s,a)
+\right].
+\end{aligned}
+\]
+
+\end{frame}
+
+\begin{frame}{TRPO: Trust-Region Policy Update}
+
+\small
+
+With parameters, the surrogate objective becomes:
+\[
+\max_{\theta}
+\mathbb{E}_{s,a\sim\pi_{\theta_{\mathrm{old}}}}
+\left[
+\frac{
+\pi_{\theta}(a|s)
+}{
+\pi_{\theta_{\mathrm{old}}}(a|s)
+}
+A^{\pi_{\theta_{\mathrm{old}}}}(s,a)
+\right]
+\]
+
+\vspace{0.1cm}
+
+But the approximation is valid only when the new policy stays close
+to the old policy.
+
+\[
+D_{\mathrm{KL}}
+\left(
+\pi_{\theta_{\mathrm{old}}}
+\;\|\;
+\pi_{\theta}
+\right)
+\leq
+\delta
+\]
+
+\begin{block}{TRPO idea}
+Maximize the surrogate improvement, but constrain the KL divergence
+between old and new policies.
+\end{block}
+
+\[
+\delta
+=
+\text{the maximum reasonable policy update size.}
+\]
+
+\end{frame}
+
+\begin{frame}{From TRPO to PPO}
+
+\small
+
+TRPO gives a principled answer:
+\[
+\text{update enough to improve the surrogate,}
+\qquad
+\text{but not beyond a KL trust region.}
+\]
+
+\vspace{0.15cm}
+
+However, this is a constrained optimization problem:
+\[
+\max_\theta L(\theta)
+\quad
+\text{subject to}
+\quad
+D_{\mathrm{KL}}
+\left(
+\pi_{\theta_{\mathrm{old}}}
+\|\pi_\theta
+\right)
+\leq \delta
+\]
+
+\vspace{0.15cm}
+
+Solving it usually requires second-order approximations and conjugate
+gradient steps.
+
+\begin{block}{PPO idea}
+Replace the hard KL constraint with a simpler clipped objective.
+\end{block}
+
+\[
+\text{The update size is controlled by clipping the probability ratio.}
+\]
+
+\end{frame}
+
+\begin{frame}{PPO: Clipped Surrogate Objective}
+
+\small
+
+Define the probability ratio:
+\[
+r_t(\theta)
+=
+\frac{
+\pi_{\theta}(A_t|S_t)
+}{
+\pi_{\theta_{\mathrm{old}}}(A_t|S_t)
+}
+\]
+
+\vspace{0.1cm}
+
+PPO maximizes:
+\[
+L^{\mathrm{CLIP}}(\theta)
+=
+\mathbb{E}_t
+\left[
+\min
+\left(
+r_t(\theta)\widehat{A}_t,\;
+\operatorname{clip}
+\left(
+r_t(\theta), 1-\epsilon, 1+\epsilon
+\right)
+\widehat{A}_t
+\right)
+\right]
+\]
+
+\vspace{0.1cm}
+
+
+\end{frame}
+
+\begin{frame}{PPO Clipping: Single Timestep}
+
+\centering
+
+\IfFileExists{ppo_clip_term.png}{
+    \includegraphics[
+        width=0.95\linewidth,
+        height=0.72\textheight,
+        keepaspectratio
+    ]{ppo_clip_term.png}
+}{
+    \fbox{
+        \parbox[c][0.72\textheight][c]{0.88\linewidth}{
+            \centering
+            \texttt{ppo\_clip\_term.png}
+        }
+    }
+}
+
+\vspace{0.05cm}
+{\scriptsize Clip term}
+
+\end{frame}
+
+\begin{frame}{PPO Clipping: Objectives}
+
+\centering
+
+\IfFileExists{ppo_objectives.png}{
+    \includegraphics[
+        width=0.95\linewidth,
+        height=0.72\textheight,
+        keepaspectratio
+    ]{ppo_objectives.png}
+}{
+    \fbox{
+        \parbox[c][0.72\textheight][c]{0.88\linewidth}{
+            \centering
+            \texttt{ppo\_objectives.png}
+        }
+    }
+}
+
+\vspace{0.05cm}
+{\scriptsize Objectives}
+
+\end{frame}
+
+\end{document}

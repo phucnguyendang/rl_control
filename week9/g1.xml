@@ -1,0 +1,127 @@
+<mujoco model="g1_build_step_01_pelvis">
+  <compiler angle="radian" meshdir="assets" autolimits="true"/>
+
+  <default>
+    <default class="g1">
+      <default class="visual">
+        <geom type="mesh"
+              density="0"
+              material="green"
+              contype="0"
+              conaffinity="0"
+              group="2"/>
+      </default>
+
+      <default class="collision">
+        <geom type="capsule"
+              priority="1"
+              condim="6"
+              group="3"/>
+      </default>
+
+      <site rgba="1 0 0 1" group="5"/>
+    </default>
+  </default>
+
+  <asset>
+    <material name="silver" rgba="0.7 0.7 0.7 1"/>
+    <material name="black" rgba="0.2 0.2 0.2 1"/>
+    <material name="red" rgba="1 0 0 1"/>
+    <material name="green" rgba="0 1 0 1"/>
+    <material name="blue" rgba="0 0 1 1"/>
+
+    <mesh name="pelvis" file="pelvis.STL"/>
+    <mesh name="pelvis_contour_link" file="pelvis_contour_link.STL"/>
+    <mesh name="left_hip_pitch_link" file="left_hip_pitch_link.STL"/>
+    <mesh name="left_hip_roll_link" file="left_hip_roll_link.STL"/>
+    <mesh name="left_hip_yaw_link" file="left_hip_yaw_link.STL"/>
+  </asset>
+
+  <worldbody>
+    <body name="pelvis" pos="0 0 0.79" childclass="g1">
+      <!-- <light pos="0 0 2" mode="trackcom"/> -->
+
+      <!-- <camera name="tracking"
+              pos="1.734 -1.135 .35"
+              xyaxes="0.552 0.834 -0.000 -0.170 0.112 0.979"
+              mode="trackcom"/> -->
+
+      <inertial pos="0 0 -0.07605"
+                quat="1 0 -0.000399148 0"
+                mass="3.813"
+                diaginertia="0.010549 0.0093089 0.0079184"/>
+
+      <freejoint name="floating_base_joint"/>
+
+      <geom class="visual" material="black" mesh="pelvis"/>
+      <geom class="visual" mesh="pelvis_contour_link"/>
+
+      <geom name="pelvis_collision"
+            class="collision"
+            type="sphere"
+            size="0.07"
+            pos="0 0 -0.08"
+            material = "red"/>
+
+      <site name="imu_in_pelvis"
+            size="0.01"
+            pos="0.04525 0 -0.08339"/>
+      
+      <body name="left_hip_pitch_link" pos="0 0.064452 -0.1027">
+        <inertial pos="0.002741 0.047791 -0.02606"
+                  quat="0.954862 0.293964 0.0302556 0.030122"
+                  mass="1.35"
+                  diaginertia="0.00181517 0.00153422 0.00116212"/>
+
+        <joint name="left_hip_pitch_joint"
+              axis="0 1 0"
+              range="-2.5307 2.8798"/>
+
+        <geom class="visual"
+              material="black"
+              mesh="left_hip_pitch_link"/>
+
+        <body name="left_hip_roll_link"
+              pos="0 0.052 -0.030465"
+              quat="0.996179 0 -0.0873386 0">
+
+          <inertial pos="0.029812 -0.001045 -0.087934"
+                    quat="0.977808 -1.97119e-05 0.205576 -0.0403793"
+                    mass="1.52"
+                    diaginertia="0.00254986 0.00241169 0.00148755"/>
+
+          <joint name="left_hip_roll_joint"
+                axis="1 0 0"
+                range="-0.5236 2.9671"/>
+
+          <geom class="visual"
+                mesh="left_hip_roll_link"/>
+
+          <geom name="left_hip_collision"
+                class="collision"
+                size="0.06"
+                fromto="0.02 0 0 0.02 0 -0.08"/>
+
+          <body name="left_hip_yaw_link" pos="0.025001 0 -0.12412">
+            <inertial pos="-0.057709 -0.010981 -0.15078"
+                      quat="0.600598 0.15832 0.223482 0.751181"
+                      mass="1.702"
+                      diaginertia="0.00776166 0.00717575 0.00160139"/>
+
+            <joint name="left_hip_yaw_joint"
+                  axis="0 0 1"
+                  range="-2.7576 2.7576"/>
+
+            <geom class="visual"
+                  mesh="left_hip_yaw_link"/>
+
+            <geom name="left_thigh_collision"
+                  class="collision"
+                  size="0.055"
+                  fromto="-0.0 0 -0.03 -0.06 0 -0.17"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

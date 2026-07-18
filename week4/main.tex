@@ -1,0 +1,958 @@
+\documentclass[aspectratio=169]{beamer}
+
+\usetheme{Madrid}
+\usecolortheme{default}
+
+\usepackage{amsmath, amssymb, bm}
+\usepackage{booktabs}
+
+\title[Week 4 Reading]{Week 4 Reading: From LQR to Trajectory Optimization}
+\subtitle{Local Stabilization, Nominal Trajectory, MPC, and iLQR}
+\author{Nguyen Dang Phuc}
+\date{}
+
+\begin{document}
+
+% Slide 1
+\begin{frame}
+  \titlepage
+\end{frame}
+
+% Slide 2
+\begin{frame}{Role of LQR in robotics}
+\large
+
+LQR is very useful in robotics, but mainly as a \textbf{local stabilizer}.
+
+\vspace{0.4cm}
+
+\begin{itemize}
+    \item It stabilizes the system around an equilibrium point or a nominal trajectory.
+    \item It gives an interpretable feedback controller:
+    \[
+    \bm{u} = \bm{u}_0 - K(\bm{x}-\bm{x}_0)
+    \]
+    \item It is not designed to solve global motion generation.
+\end{itemize}
+
+\vspace{0.4cm}
+
+\begin{block}{Key distinction}
+LQR answers: \textit{How do we stabilize around a known point or trajectory?}
+
+It does not answer: \textit{How do we generate the trajectory in the first place?}
+\end{block}
+
+\end{frame}
+
+% Slide 3
+\begin{frame}{Optimal control problem}
+\large
+
+Consider a nonlinear dynamical system:
+
+\[
+\dot{\bm{x}} = f(\bm{x}, \bm{u})
+\]
+
+We want to choose a control trajectory that minimizes:
+
+\[
+J =
+\ell_f(\bm{x}(t_f))
++
+\int_{t_0}^{t_f}
+\ell(\bm{x}(t), \bm{u}(t))\,dt
+\]
+
+subject to:
+
+\[
+\dot{\bm{x}}(t) = f(\bm{x}(t), \bm{u}(t))
+\]
+
+\vspace{0.3cm}
+
+\begin{block}{Interpretation}
+Optimal control chooses actions while respecting the physical dynamics.
+\end{block}
+
+\end{frame}
+
+% Slide 4
+\begin{frame}{The LQR problem}
+\large
+
+LQR is a special optimal control problem.
+
+\vspace{0.2cm}
+
+Linear dynamics:
+
+\[
+\dot{\bm{x}} = A\bm{x} + B\bm{u}
+\]
+
+Quadratic infinite-horizon cost:
+
+\[
+J =
+\int_0^\infty
+\left(
+\bm{x}^T Q \bm{x}
++
+\bm{u}^T R \bm{u}
+\right)dt
+\]
+
+where:
+
+\[
+Q = Q^T \succeq 0,
+\qquad
+R = R^T \succ 0
+\]
+
+\vspace{0.2cm}
+
+\begin{itemize}
+    \item $Q$: penalty on state error.
+    \item $R$: penalty on control effort.
+\end{itemize}
+
+\end{frame}
+% Slide 5
+\begin{frame}[t]{From HJB to the optimal LQR policy}
+\large
+
+Infinite-horizon HJB equation:
+
+\[
+0 =
+\min_{\bm{u}}
+\left[
+\ell(\bm{x},\bm{u})
++
+\nabla_{\bm{x}} V(\bm{x})^{T}
+f(\bm{x},\bm{u})
+\right]
+\]
+
+\vspace{-0.1cm}
+
+For the LQR problem:
+
+\[
+\begin{aligned}
+f(\bm{x},\bm{u}) 
+&= A\bm{x}+B\bm{u}, \\[0.15cm]
+\ell(\bm{x},\bm{u})
+&=
+\bm{x}^TQ\bm{x}
++
+\bm{u}^TR\bm{u}.
+\end{aligned}
+\]
+
+\vspace{-0.1cm}
+
+Quadratic value function:
+\[
+V(\bm{x}) = \bm{x}^T S \bm{x},
+\qquad
+S=S^T \succeq 0
+\]
+\end{frame}
+% Slide 6
+\begin{frame}{Deriving the Riccati equation}
+\large
+
+Substitute into HJB:
+
+\[
+0 =
+\min_{\bm{u}}
+\left[
+\bm{x}^TQ\bm{x}
++
+\bm{u}^TR\bm{u}
++
+2\bm{x}^T S(A\bm{x}+B\bm{u})
+\right]
+\]
+
+Define:
+
+\[
+F(\bm{u})
+=
+\bm{x}^TQ\bm{x}
++
+\bm{u}^TR\bm{u}
++
+2\bm{x}^TSA\bm{x}
++
+2\bm{x}^TSB\bm{u}
+\]
+
+Take derivative w.r.t. $\bm{u}$:
+
+\[
+\frac{\partial F}{\partial \bm{u}}
+=
+2R\bm{u}
++
+2B^TS\bm{x}
+=
+0
+\]
+
+Therefore:
+
+\[
+\bm{u}^*
+=
+-R^{-1}B^TS\bm{x}
+=
+-K\bm{x}
+\]
+
+\end{frame}
+
+% Slide 7
+\begin{frame}{Solving Riccati gives the feedback gain}
+\large
+
+Substitute the optimal policy back into HJB:
+
+\[
+\bm{u}^* = -R^{-1}B^TS\bm{x}
+\]
+
+This yields:
+
+\[
+0 =
+\bm{x}^T
+\left[
+A^TS + SA
+-
+SBR^{-1}B^TS
++
+Q
+\right]
+\bm{x}
+\]
+
+Since this must hold for all $\bm{x}$:
+
+\[
+\boxed{
+A^TS + SA
+-
+SBR^{-1}B^TS
++
+Q
+=
+0
+}
+\]
+
+This is the \textbf{algebraic Riccati equation}.
+
+\vspace{0.3cm}
+
+Once $S$ is solved:
+
+\[
+K = R^{-1}B^TS
+\]
+
+\[
+\bm{u}^* = -K\bm{x}
+\]
+
+\end{frame}
+
+% Slide 8
+\begin{frame}{Why LQR is still useful for nonlinear systems}
+\large
+
+Most robotic systems are nonlinear:
+
+\[
+\dot{\bm{x}} = f(\bm{x}, \bm{u})
+\]
+
+Around a stabilizable operating point $(\bm{x}_0,\bm{u}_0)$:
+
+\[
+f(\bm{x}_0,\bm{u}_0)=0
+\]
+
+Define error coordinates:
+
+\[
+\bar{\bm{x}} = \bm{x}-\bm{x}_0,
+\qquad
+\bar{\bm{u}} = \bm{u}-\bm{u}_0
+\]
+
+Linearize:
+
+\[
+\dot{\bar{\bm{x}}}
+\approx
+A\bar{\bm{x}} + B\bar{\bm{u}}
+\]
+
+Then LQR gives:
+
+\[
+\bm{u}^*
+=
+\bm{u}_0
+-
+K(\bm{x}-\bm{x}_0)
+\]
+
+\end{frame}
+
+% Slide 9
+\begin{frame}{The limitation of local control}
+\large
+
+LQR is powerful, but local.
+
+\vspace{0.3cm}
+
+It works when:
+
+\[
+\bm{x} \approx \bm{x}_0
+\]
+
+or when the system stays close to a known trajectory.
+
+\vspace{0.4cm}
+
+But many robotic tasks require:
+
+\[
+\text{initial state}
+\longrightarrow
+\text{desired behavior}
+\]
+
+through large nonlinear motion.
+
+\vspace{0.4cm}
+
+\begin{block}{Limitation}
+LQR can stabilize around a target, but it does not generate the global motion needed to reach that target.
+\end{block}
+
+\end{frame}
+
+% Slide 10
+\begin{frame}{If a nominal trajectory is already given}
+\large
+
+Assume we already have a feasible nominal trajectory:
+
+\[
+\bm{x}_0(t), \bm{u}_0(t)
+\]
+
+satisfying:
+
+\[
+\dot{\bm{x}}_0(t)
+=
+f(\bm{x}_0(t),\bm{u}_0(t))
+\]
+
+Define trajectory-relative errors:
+
+\[
+\bar{\bm{x}}(t)
+=
+\bm{x}(t)-\bm{x}_0(t)
+\]
+
+\[
+\bar{\bm{u}}(t)
+=
+\bm{u}(t)-\bm{u}_0(t)
+\]
+
+Linearize along the trajectory:
+
+\[
+\dot{\bar{\bm{x}}}
+\approx
+A(t)\bar{\bm{x}}
++
+B(t)\bar{\bm{u}}
+\]
+
+\end{frame}
+
+% Slide 11
+\begin{frame}{From nominal trajectory to feedback}
+\large
+
+Using time-varying LQR, we obtain:
+
+\[
+\bar{\bm{u}}^*(t)
+=
+-K(t)\bar{\bm{x}}(t)
+\]
+
+Therefore:
+
+\[
+\boxed{
+\bm{u}^*(t)
+=
+\bm{u}_0(t)
+-
+K(t)
+\left(
+\bm{x}(t)-\bm{x}_0(t)
+\right)
+}
+\]
+
+\vspace{0.4cm}
+
+\begin{block}{Interpretation}
+The nominal trajectory gives the planned motion.  
+Time-varying LQR gives local correction around that motion.
+\end{block}
+
+\vspace{0.3cm}
+
+\[
+\text{open-loop trajectory}
++
+\text{local feedback}
+=
+\text{locally stabilized motion}
+\]
+
+\end{frame}
+
+% Slide 12
+\begin{frame}{Trajectory optimization}
+\large
+
+Now we return to the missing question:
+
+\[
+\textbf{How do we find the nominal trajectory?}
+\]
+
+\vspace{0.3cm}
+
+Trajectory optimization searches for:
+
+\[
+\bm{x}_0(t), \bm{u}_0(t)
+\]
+
+by solving:
+
+\[
+\min_{\bm{u}(\cdot)}
+\ell_f(\bm{x}(t_f))
++
+\int_{t_0}^{t_f}
+\ell(\bm{x}(t),\bm{u}(t))dt
+\]
+
+subject to:
+
+\[
+\dot{\bm{x}}(t)
+=
+f(\bm{x}(t),\bm{u}(t))
+\]
+
+\[
+\bm{x}(t_0)=\bm{x}_0
+\]
+
+\end{frame}
+
+% Slide 13
+\begin{frame}{How to model trajectory optimization}
+\large
+
+The continuous constraint:
+
+\[
+\dot{\bm{x}}(t)
+=
+f(\bm{x}(t),\bm{u}(t)),
+\qquad
+\forall t
+\]
+
+is difficult to enforce directly.
+
+\vspace{0.4cm}
+
+So trajectory optimization methods replace it with discrete approximations.
+
+\vspace{0.3cm}
+
+Three common formulations:
+
+\begin{enumerate}
+    \item Direct transcription
+    \item Direct shooting
+    \item Direct collocation
+\end{enumerate}
+
+\end{frame}
+
+% Slide 14
+\begin{frame}{Direct transcription}
+
+Decision variables:
+
+\[
+\bm{x}[0],\ldots,\bm{x}[N],
+\qquad
+\bm{u}[0],\ldots,\bm{u}[N-1]
+\]
+
+Optimization problem:
+
+\[
+\min_{\bm{x}[\cdot],\bm{u}[\cdot]}
+\ell_f(\bm{x}[N])
++
+\sum_{n=0}^{N-1}
+\ell(\bm{x}[n],\bm{u}[n])
+\]
+
+subject to discrete dynamics:
+
+\[
+\bm{x}[n+1]
+=
+f_d(\bm{x}[n],\bm{u}[n])
+\]
+
+\[
+\bm{x}[0]=\bm{x}_0
+\]
+
+\vspace{0.3cm}
+
+
+\end{frame}
+
+% Slide 15
+\begin{frame}{Direct shooting}
+\large
+
+Decision variables:
+
+\[
+\bm{u}[0],\ldots,\bm{u}[N-1]
+\]
+
+States are generated by forward simulation:
+
+\[
+\bm{x}[n+1]
+=
+f_d(\bm{x}[n],\bm{u}[n])
+\]
+
+So:
+
+\[
+\bm{x}[n]
+=
+\phi_n(\bm{x}_0,\bm{u}[0],\ldots,\bm{u}[n-1])
+\]
+
+The optimization becomes:
+
+\[
+\min_{\bm{u}[\cdot]}
+\ell_f(\bm{x}[N])
++
+\sum_{n=0}^{N-1}
+\ell(\bm{x}[n],\bm{u}[n])
+\]
+
+\vspace{0.3cm}
+
+\begin{block}{Intuition}
+Optimize only controls; states are implicit through rollout.
+\end{block}
+
+\end{frame}
+
+% Slide 16
+\begin{frame}{Direct collocation}
+\large
+
+Direct collocation represents states and controls as piecewise polynomials.
+
+\vspace{0.3cm}
+
+Decision variables are values at break points:
+
+\[
+\bm{x}[0],\ldots,\bm{x}[N],
+\qquad
+\bm{u}[0],\ldots,\bm{u}[N]
+\]
+
+Between two break points, choose a collocation point:
+
+\[
+t_{c,k}
+=
+\frac{1}{2}(t_k+t_{k+1})
+\]
+
+Then enforce dynamics at that point:
+
+\[
+\dot{\bm{x}}(t_{c,k})
+=
+f(\bm{x}(t_{c,k}),\bm{u}(t_{c,k}))
+\]
+
+\end{frame}
+
+% Slide 17
+\begin{frame}{Model Predictive Control}
+\large
+
+If trajectory optimization is fast enough, it can be used as a feedback controller.
+
+\vspace{0.3cm}
+
+MPC loop:
+
+\begin{enumerate}
+    \item Measure current state $\bm{x}(t)$.
+    \item Solve a finite-horizon trajectory optimization problem.
+    \item Execute only the first action.
+    \item Move one step forward and repeat.
+\end{enumerate}
+
+\vspace{0.4cm}
+
+\[
+\pi(\bm{x})
+=
+\text{first action from the optimized trajectory}
+\]
+
+\vspace{0.3cm}
+
+\begin{block}{Key idea}
+MPC turns trajectory optimization into feedback by repeatedly re-planning.
+\end{block}
+
+\end{frame}
+
+% Slide 18
+\begin{frame}[t]{iLQR: big picture}
+\large
+
+iLQR solves nonlinear trajectory optimization by repeatedly turning the problem into a local time-varying LQR problem.
+
+\vspace{0.25cm}
+
+\begin{enumerate}
+    \item Initialize a nominal control sequence:
+    \[
+    \bar{\bm{u}}_{0:N-1}
+    \]
+    \item Roll out the true dynamics:
+    \[
+    \bar{\bm{x}}_{t+1}=f_t(\bar{\bm{x}}_t,\bar{\bm{u}}_t)
+    \]
+    \item Around $(\bar{\bm{x}}_t,\bar{\bm{u}}_t)$, linearize dynamics and approximate cost quadratically.
+    \item Solve this local LQR problem to get a better trajectory.
+    \item Repeat until the true nonlinear cost no longer improves much.
+\end{enumerate}
+
+\vspace{0.15cm}
+
+\[
+\text{rollout}
+\rightarrow
+\text{local LQR}
+\rightarrow
+\text{improved rollout}
+\rightarrow
+\text{repeat}
+\]
+
+\end{frame}
+
+% Slide 19
+\begin{frame}[t]{iLQR problem setup}
+\large
+
+Discrete nonlinear dynamics:
+
+\[
+\bm{x}_{t+1}=f_t(\bm{x}_t,\bm{u}_t),
+\qquad
+\bm{x}_0 \text{ given}
+\]
+
+Finite-horizon objective:
+
+\[
+\min_{\bm{u}_0,\ldots,\bm{u}_{N-1}}
+J
+=
+\ell_f(\bm{x}_N)
++
+\sum_{t=0}^{N-1}\ell_t(\bm{x}_t,\bm{u}_t)
+\]
+
+\vspace{0.2cm}
+
+At each iteration, search near the nominal trajectory:
+
+\[
+\bm{x}_t=\bar{\bm{x}}_t+\delta\bm{x}_t,
+\qquad
+\bm{u}_t=\bar{\bm{u}}_t+\delta\bm{u}_t
+\]
+
+\begin{block}{Important}
+The nominal trajectory is feasible because it is generated by rolling out the dynamics.
+\end{block}
+
+\end{frame}
+
+% Slide 20
+\begin{frame}[t]{Step 1a: local dynamics}
+\large
+
+Linearize the dynamics around each nominal point:
+
+\[
+f_t(\bar{\bm{x}}_t+\delta\bm{x}_t,\bar{\bm{u}}_t+\delta\bm{u}_t)
+\approx
+f_t(\bar{\bm{x}}_t,\bar{\bm{u}}_t)
++
+A_t\delta\bm{x}_t
++
+B_t\delta\bm{u}_t
+\]
+
+\[
+A_t=
+\left.\frac{\partial f_t}{\partial \bm{x}}\right|_{\bar{\bm{x}}_t,\bar{\bm{u}}_t},
+\qquad
+B_t=
+\left.\frac{\partial f_t}{\partial \bm{u}}\right|_{\bar{\bm{x}}_t,\bar{\bm{u}}_t}
+\]
+
+Since $\bar{\bm{x}}_{t+1}=f_t(\bar{\bm{x}}_t,\bar{\bm{u}}_t)$:
+
+\[
+\delta\bm{x}_{t+1}
+\approx
+A_t\delta\bm{x}_t+B_t\delta\bm{u}_t
+\]
+
+\end{frame}
+
+% Slide 21
+\begin{frame}[t]{Step 1b: local quadratic cost}
+\small
+
+Approximate the running cost to second order around
+$(\bar{\bm{x}}_t,\bar{\bm{u}}_t)$:
+
+\[
+\begin{aligned}
+\ell_t(\bm{x}_t,\bm{u}_t)
+\approx
+&\ \ell_t
++
+\ell_x^T\delta\bm{x}_t
++
+\ell_u^T\delta\bm{u}_t \\
+&+
+\frac{1}{2}\delta\bm{x}_t^T\ell_{xx}\delta\bm{x}_t
++
+\delta\bm{u}_t^T\ell_{ux}\delta\bm{x}_t
++
+\frac{1}{2}\delta\bm{u}_t^T\ell_{uu}\delta\bm{u}_t .
+\end{aligned}
+\]
+
+All derivatives are evaluated at the nominal point:
+
+\[
+\ell_x=
+\left.\frac{\partial \ell_t}{\partial \bm{x}}\right|_{\bar{\bm{x}}_t,\bar{\bm{u}}_t},
+\qquad
+\ell_u=
+\left.\frac{\partial \ell_t}{\partial \bm{u}}\right|_{\bar{\bm{x}}_t,\bar{\bm{u}}_t}
+\]
+
+Terminal cost:
+
+\[
+\ell_f(\bm{x}_N)
+\approx
+\ell_f(\bar{\bm{x}}_N)
++
+\ell_{f,x}^T\delta\bm{x}_N
++
+\frac{1}{2}\delta\bm{x}_N^T\ell_{f,xx}\delta\bm{x}_N
+\]
+
+\end{frame}
+
+% Slide 22
+\begin{frame}[t]{Step 2: backward pass}
+\small
+
+Assume the next value function is locally quadratic:
+
+\[
+V_{t+1}
+\approx
+V_0'
++
+{V_x'}^T\delta\bm{x}_{t+1}
++
+\frac{1}{2}\delta\bm{x}_{t+1}^T V_{xx}'\delta\bm{x}_{t+1}
+\]
+
+Define the local one-step Q-function:
+
+\[
+Q_t(\delta\bm{x}_t,\delta\bm{u}_t)
+=
+\ell_t(\delta\bm{x}_t,\delta\bm{u}_t)
++
+V_{t+1}(A_t\delta\bm{x}_t+B_t\delta\bm{u}_t)
+\]
+
+For fixed $\delta\bm{x}_t$, solve the local control problem:
+
+\[
+\delta\bm{u}_t^*
+=
+\operatorname*{arg\,min}_{\delta\bm{u}_t}
+Q_t(\delta\bm{x}_t,\delta\bm{u}_t)
+\]
+
+Because $Q_t$ is quadratic, the solution is an affine correction:
+
+\[
+\delta\bm{u}_t^*
+=
+k_t+K_t\delta\bm{x}_t,
+\qquad
+k_t=-Q_{uu}^{-1}Q_u,
+\qquad
+K_t=-Q_{uu}^{-1}Q_{ux}
+\]
+
+\vspace{0.1cm}
+
+\[
+\text{feedforward step } k_t
+\quad + \quad
+\text{feedback correction } K_t\delta\bm{x}_t
+\]
+
+\end{frame}
+
+% Slide 23
+\begin{frame}[t]{Step 3: forward pass}
+\large
+
+The backward pass solves only a local approximation.
+To update the real trajectory, roll out the nonlinear dynamics again.
+
+\vspace{0.2cm}
+
+For a step size $\alpha\in(0,1]$:
+
+\[
+\bm{x}^{\mathrm{new}}_0=\bm{x}_0
+\]
+
+\[
+\bm{u}^{\mathrm{new}}_t
+=
+\bar{\bm{u}}_t
++
+\alpha k_t
++
+K_t(\bm{x}^{\mathrm{new}}_t-\bar{\bm{x}}_t)
+\]
+
+\[
+\bm{x}^{\mathrm{new}}_{t+1}
+=
+f_t(\bm{x}^{\mathrm{new}}_t,\bm{u}^{\mathrm{new}}_t)
+\]
+
+\vspace{0.15cm}
+
+Accept the first rollout that reduces the true nonlinear cost:
+
+\[
+J(\bm{x}^{\mathrm{new}},\bm{u}^{\mathrm{new}})
+<
+J(\bar{\bm{x}},\bar{\bm{u}})
+\]
+
+\end{frame}
+
+% Slide 24
+\begin{frame}[t]{Full iLQR loop}
+\small
+
+\begin{enumerate}
+    \item Choose an initial control guess $\bar{\bm{u}}_{0:N-1}$.
+    \item Roll out the dynamics to get $\bar{\bm{x}}_{0:N}$ and cost $J$.
+    \item Backward pass:
+    \begin{itemize}
+        \item compute $A_t,B_t$ and cost derivatives,
+        \item compute $Q_x,Q_u,Q_{xx},Q_{ux},Q_{uu}$,
+        \item solve for $k_t$ and $K_t$.
+    \end{itemize}
+    \item Forward pass:
+    \begin{itemize}
+        \item try $\alpha=1,0.5,0.25,\ldots$,
+        \item roll out true dynamics,
+        \item accept the first lower-cost trajectory.
+    \end{itemize}
+    \item Replace the nominal trajectory and repeat.
+\end{enumerate}
+
+\begin{block}{Practical note}
+If $Q_{uu}$ is not positive definite enough, use regularization
+$Q_{uu}^{\mathrm{reg}}=Q_{uu}+\lambda I$.
+\end{block}
+
+\end{frame}
+
+
+\end{document}
