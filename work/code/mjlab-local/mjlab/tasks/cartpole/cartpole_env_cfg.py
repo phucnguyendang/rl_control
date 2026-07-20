@@ -315,7 +315,7 @@ def cartpole_reppo_runner_cfg() -> RslRlReppoRunnerCfg:
   """Create a REPPO runner configuration for Cartpole."""
   return RslRlReppoRunnerCfg(
     actor=RslRlModelCfg(
-      hidden_dims=(128, 128, 128),
+      hidden_dims=(64,64),
       activation="swish",
       obs_normalization=True,
       distribution_cfg={
@@ -328,7 +328,7 @@ def cartpole_reppo_runner_cfg() -> RslRlReppoRunnerCfg:
       class_name="LayerNormMLPModel",
     ),
     critic=RslRlReppoCriticCfg(
-      hidden_dims=(256, 256, 256),
+      hidden_dims=(128, 128),
       activation="swish",
       obs_normalization=True,
       num_bins=151,
@@ -336,17 +336,20 @@ def cartpole_reppo_runner_cfg() -> RslRlReppoRunnerCfg:
       vmax=10.0,
     ),
     algorithm=RslRlReppoAlgorithmCfg(
-      num_learning_epochs=8,
-      num_mini_batches=64,
-      learning_rate=3e-4,
+      num_learning_epochs=5,
+      num_mini_batches=4,
+      learning_rate=1.0e-3,
       gamma=0.99,
       lam=0.95,
       desired_kl=0.01,
-      target_entropy=-0.5,
+      target_entropy=-1.0,
       init_alpha_temp=0.1,
       init_alpha_kl=0.1,
       num_kl_samples=4,
       max_grad_norm=1.0,
+      optimizer="adamw",
+      weight_decay=1.0e-3,
+      adam_betas=(0.9, 0.95),
     ),
     experiment_name="cartpole_reppo",
     save_interval=50,
