@@ -1,0 +1,15 @@
+WARNING Mon Jul 20 12:08:28 2026: Attach conflict when attaching 'cartpole', policy is 'warning'
+timestep: parent has 0.002, child has 0.01, keeping parent value
+
+WARNING Mon Jul 20 12:13:24 2026: Attach conflict when attaching 'cartpole', policy is 'warning'
+timestep: parent has 0.002, child has 0.01, keeping parent value
+
+WARNING Mon Jul 20 12:17:33 2026: Attach conflict when attaching 'cartpole', policy is 'warning'
+timestep: parent has 0.002, child has 0.01, keeping parent value
+
+WARNING Mon Jul 20 12:25:25 2026: Attach conflict when attaching 'cartpole', policy is 'warning'
+timestep: parent has 0.002, child has 0.01, keeping parent value
+
+WARNING Mon Jul 20 12:30:15 2026: Attach conflict when attaching 'cartpole', policy is 'warning'
+timestep: parent has 0.002, child has 0.01, keeping parent value
+

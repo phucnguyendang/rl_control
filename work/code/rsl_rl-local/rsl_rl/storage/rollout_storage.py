@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import torch
+import warnings
 from collections.abc import Generator
 from tensordict import TensorDict
 
@@ -41,6 +42,15 @@ class RolloutStorage:
 
             self.dones: torch.Tensor | None = None
             """Done flags indicating episode termination."""
+
+            self.valid: torch.Tensor | None = None
+            """Whether the transition has a trustworthy next observation."""
+
+            self.bootstrap: torch.Tensor | None = None
+            """Whether this transition is an explicit bootstrap boundary."""
+
+            self.bootstrap_values: torch.Tensor | None = None
+            """Value estimates at explicit bootstrap boundaries."""
 
             # For reinforcement learning
             self.values: torch.Tensor | None = None
@@ -84,6 +94,7 @@ class RolloutStorage:
             masks: torch.Tensor | None = None,
             privileged_actions: torch.Tensor | None = None,
             dones: torch.Tensor | None = None,
+            valid: torch.Tensor | None = None,
         ) -> None:
             """Initialize a batch container over rollout data."""
             self.observations: TensorDict | None = observations
@@ -114,6 +125,9 @@ class RolloutStorage:
 
             self.dones: torch.Tensor | None = dones
             """Batch of done flags (distillation only)."""
+
+            self.valid: torch.Tensor | None = valid
+            """Mask selecting transitions with trustworthy learning targets."""
 
             # For recurrent networks
             self.hidden_states: tuple[HiddenState, HiddenState] = hidden_states
@@ -158,6 +172,9 @@ class RolloutStorage:
         # For reinforcement learning
         if training_type == "rl":
             self.values = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+            self.valid = torch.ones(num_transitions_per_env, num_envs, 1, dtype=torch.bool, device=self.device)
+            self.bootstrap = torch.zeros(num_transitions_per_env, num_envs, 1, dtype=torch.bool, device=self.device)
+            self.bootstrap_values = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
             self.actions_log_prob = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
             self.distribution_params: tuple[torch.Tensor, ...] | None = None  # Lazily initialized on first transition
             self.returns = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
@@ -189,6 +206,18 @@ class RolloutStorage:
         # For reinforcement learning
         if self.training_type == "rl":
             self.values[self.step].copy_(transition.values)  # type: ignore
+            if transition.valid is None:
+                self.valid[self.step].fill_(True)
+            else:
+                self.valid[self.step].copy_(transition.valid.view(-1, 1).bool())
+            if transition.bootstrap is None:
+                self.bootstrap[self.step].fill_(False)
+            else:
+                self.bootstrap[self.step].copy_(transition.bootstrap.view(-1, 1).bool())
+            if transition.bootstrap_values is None:
+                self.bootstrap_values[self.step].zero_()
+            else:
+                self.bootstrap_values[self.step].copy_(transition.bootstrap_values.view(-1, 1))
             self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
             if self.distribution_params is None:  # Initialize the distribution parameters
                 self.distribution_params = tuple(
@@ -203,6 +232,43 @@ class RolloutStorage:
 
         # Increment the counter
         self.step += 1
+
+    def mark_last_transition_as_bootstrap(self, env_mask: torch.Tensor, bootstrap_values: torch.Tensor) -> torch.Tensor:
+        """Turn the previous valid transition into a non-terminal rollout boundary.
+
+        This is used when an auto-reset environment reports a timeout but does not
+        expose the observation immediately before reset. The timeout-causing
+        transition cannot be trained, but its current observation is still the
+        trustworthy next observation of the preceding transition.
+
+        Returns:
+            Boolean mask of environments for which a previous valid transition was
+            available and marked.
+        """
+        if self.training_type != "rl":
+            raise ValueError("Bootstrap boundaries are only available for reinforcement-learning storage.")
+        marked = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        if self.step == 0:
+            return marked
+        requested = env_mask.to(self.device).view(-1).bool()
+        marked = requested & self.valid[self.step - 1].view(-1)
+        if marked.any():
+            self.bootstrap[self.step - 1, marked] = True
+            self.bootstrap_values[self.step - 1, marked] = bootstrap_values.to(self.device).view(-1, 1)[marked]
+        return marked
+
+    def normalize_advantages(self) -> None:
+        """Normalize advantages over valid transitions only."""
+        if self.training_type != "rl":
+            raise ValueError("Advantages are only available for reinforcement-learning storage.")
+        mask = self.valid
+        if not mask.any():
+            raise ValueError("The rollout does not contain any valid transitions.")
+        valid_advantages = self.advantages[mask]
+        mean = valid_advantages.mean()
+        std = valid_advantages.std(unbiased=False)
+        self.advantages.zero_()
+        self.advantages[mask] = (valid_advantages - mean) / (std + 1e-8)
 
     def clear(self) -> None:
         """Reset the write cursor for the next rollout."""
@@ -226,9 +292,16 @@ class RolloutStorage:
         """Yield shuffled flat mini-batches for feedforward RL updates."""
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
-        batch_size = self.num_envs * self.num_transitions_per_env
-        mini_batch_size = batch_size // num_mini_batches
-        indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device)
+        valid_indices = self.valid.flatten().nonzero(as_tuple=False).squeeze(-1)
+        valid_count = valid_indices.numel()
+        if valid_count == 0:
+            raise ValueError("The rollout does not contain any valid transitions.")
+        if valid_count < num_mini_batches:
+            warnings.warn(
+                f"Only {valid_count} valid transitions are available for {num_mini_batches} mini-batches; "
+                "sampling valid transitions with replacement.",
+                RuntimeWarning,
+            )
 
         # Flatten the data
         observations = self.observations.flatten(0, 1)
@@ -240,12 +313,11 @@ class RolloutStorage:
         old_distribution_params = tuple(p.flatten(0, 1) for p in self.distribution_params)  # type: ignore
 
         for epoch in range(num_epochs):
-            for i in range(num_mini_batches):
-                # Select the indices for the mini-batch
-                start = i * mini_batch_size
-                stop = (i + 1) * mini_batch_size
-                batch_idx = indices[start:stop]
-
+            if valid_count < num_mini_batches:
+                epoch_indices = valid_indices[torch.randint(valid_count, (num_mini_batches,), device=self.device)]
+            else:
+                epoch_indices = valid_indices[torch.randperm(valid_count, device=self.device)]
+            for batch_idx in torch.tensor_split(epoch_indices, num_mini_batches):
                 # Yield the mini-batch
                 yield RolloutStorage.Batch(
                     observations=observations[batch_idx],  # type: ignore
@@ -255,6 +327,7 @@ class RolloutStorage:
                     returns=returns[batch_idx],
                     old_actions_log_prob=old_actions_log_prob[batch_idx],
                     old_distribution_params=tuple(p[batch_idx] for p in old_distribution_params),
+                    valid=torch.ones(batch_idx.numel(), 1, dtype=torch.bool, device=self.device),
                 )
 
     # For reinforcement learning with recurrent networks
@@ -264,7 +337,8 @@ class RolloutStorage:
         """Yield trajectory mini-batches with masks and recurrent hidden states."""
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
-        padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
+        trajectory_dones = self.dones.bool() | ~self.valid
+        padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, trajectory_dones)
         mini_batch_size = self.num_envs // num_mini_batches
 
         for ep in range(num_epochs):
@@ -274,7 +348,7 @@ class RolloutStorage:
                 start = i * mini_batch_size
                 stop = (i + 1) * mini_batch_size
 
-                dones = self.dones.squeeze(-1)
+                dones = trajectory_dones.squeeze(-1)
                 last_was_done = torch.zeros_like(dones, dtype=torch.bool)
                 last_was_done[1:] = dones[:-1]
                 last_was_done[0] = True
@@ -289,7 +363,8 @@ class RolloutStorage:
                 # take a batch of trajectories and finally reshape back to [num_layers, batch, hidden_dim]
                 if self.saved_hidden_state_a is not None:
                     hidden_state_a_batch = [
-                        saved_hidden_state.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
+                        saved_hidden_state
+                        .permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
                         .transpose(1, 0)
                         .contiguous()
                         for saved_hidden_state in self.saved_hidden_state_a
@@ -302,7 +377,8 @@ class RolloutStorage:
                     hidden_state_a_batch = None
                 if self.saved_hidden_state_c is not None:
                     hidden_state_c_batch = [
-                        saved_hidden_state.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
+                        saved_hidden_state
+                        .permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
                         .transpose(1, 0)
                         .contiguous()
                         for saved_hidden_state in self.saved_hidden_state_c
@@ -324,6 +400,7 @@ class RolloutStorage:
                     old_distribution_params=tuple(p[:, start:stop] for p in self.distribution_params),  # type: ignore
                     hidden_states=(hidden_state_a_batch, hidden_state_c_batch),  # type: ignore
                     masks=trajectory_masks[:, first_traj:last_traj],
+                    valid=self.valid[:, start:stop],
                 )
 
                 first_traj = last_traj

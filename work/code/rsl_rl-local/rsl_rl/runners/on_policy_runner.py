@@ -38,6 +38,11 @@ class OnPolicyRunner:
         # Create the algorithm
         alg_class: type[PPO] = resolve_callable(self.cfg["algorithm"]["class_name"])  # type: ignore
         self.alg = alg_class.construct_algorithm(obs, self.env, self.cfg, self.device)
+        # Mjlab currently routes every RL task through its OnPolicyRunner subclass.
+        # Detect replay-based algorithms here so they can use that entrypoint
+        # without requiring a simulator-side runner patch.
+        self.is_off_policy = hasattr(self.alg, "replay_buffer")
+        self.start_training = self.cfg.get("start_training", 0)
 
         # Create the logger
         self.logger = Logger(
@@ -93,7 +98,7 @@ class OnPolicyRunner:
                     # Process the step
                     self.alg.process_env_step(obs, rewards, dones, extras)
                     # Extract intrinsic rewards if RND is used (only for logging)
-                    intrinsic_rewards = self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None
+                    intrinsic_rewards = self.alg.intrinsic_rewards if self.cfg["algorithm"].get("rnd_cfg") else None
                     # Book keeping
                     self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
 
@@ -101,11 +106,21 @@ class OnPolicyRunner:
                 collect_time = stop - start
                 start = stop
 
-                # Compute returns
-                self.alg.compute_returns(obs)
+                # On-policy algorithms need a rollout-wide return pass. Replay
+                # algorithms construct targets while sampling their buffer.
+                if not self.is_off_policy:
+                    self.alg.compute_returns(obs)
 
             # Update policy
-            loss_dict = self.alg.update()
+            replay_ready = (
+                self.alg.replay_buffer.can_sample()  # type: ignore[attr-defined]
+                if self.is_off_policy
+                else True
+            )
+            if not self.is_off_policy or (it >= self.start_training and replay_ready):
+                loss_dict = self.alg.update()
+            else:
+                loss_dict = {}
 
             stop = time.time()
             learn_time = stop - start
@@ -119,9 +134,10 @@ class OnPolicyRunner:
                 collect_time=collect_time,
                 learn_time=learn_time,
                 loss_dict=loss_dict,
-                learning_rate=self.alg.learning_rate,
+                learning_rate=getattr(self.alg, "learning_rate", getattr(self.alg, "actor_learning_rate", 0.0)),
                 action_std=self.alg.get_policy().output_std,
-                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,
+                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"].get("rnd_cfg") else None,
+                alpha=getattr(self.alg, "alpha", None),
             )
 
             # Save model

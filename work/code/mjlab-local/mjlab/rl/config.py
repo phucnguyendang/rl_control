@@ -146,6 +146,94 @@ class RslRlReppoAlgorithmCfg:
 
 
 @dataclass
+class RslRlSacActorCfg:
+  """Configuration for SAC's bounded tanh-Gaussian actor."""
+
+  hidden_dims: Tuple[int, ...] = (256, 256, 256)
+  """Hidden dimensions of the actor network."""
+  activation: str = "elu"
+  """Hidden-layer activation."""
+  obs_normalization: bool = False
+  """Whether to normalize actor observations."""
+  init_noise_std: float = 1.0
+  """Initial standard deviation of the action distribution."""
+  layer_norm: bool = False
+  """Whether to apply layer normalization in the actor network."""
+  log_std_min: float = -20.0
+  """Minimum log standard deviation."""
+  log_std_max: float = 2.0
+  """Maximum log standard deviation."""
+  action_low: float = -1.0
+  """Lower bound of the normalized action space."""
+  action_high: float = 1.0
+  """Upper bound of the normalized action space."""
+  class_name: str = "SACActorModel"
+  """Actor class name resolved by RSL-RL."""
+
+
+@dataclass
+class RslRlSacCriticCfg:
+  """Configuration for SAC's twin action-value critic."""
+
+  hidden_dims: Tuple[int, ...] = (256, 256, 256)
+  """Hidden dimensions shared by both Q networks."""
+  activation: str = "elu"
+  """Hidden-layer activation."""
+  obs_normalization: bool = False
+  """Whether to normalize critic observations."""
+  layer_norm: bool = False
+  """Whether to apply layer normalization in the Q networks."""
+  class_name: str = "SACCriticModel"
+  """Critic class name resolved by RSL-RL."""
+
+
+@dataclass
+class RslRlSacAlgorithmCfg:
+  """Configuration for Soft Actor-Critic."""
+
+  replay_buffer_size: int = 1_000_000
+  """Total replay capacity across all vectorized environments."""
+  num_learning_epochs: int = 1
+  """Number of passes through the requested replay updates."""
+  num_mini_batches: int = 1
+  """Number of replay mini-batches sampled per epoch."""
+  mini_batch_size: int = 256
+  """Number of replay transitions in each mini-batch."""
+  actor_learning_rate: float = 3e-4
+  """Actor optimizer learning rate."""
+  critic_learning_rate: float = 3e-4
+  """Critic optimizer learning rate."""
+  alpha_learning_rate: float = 3e-4
+  """Entropy-temperature optimizer learning rate."""
+  actor_optimizer: Literal["adam", "adamw", "sgd", "rmsprop"] = "adam"
+  """Actor optimizer type."""
+  critic_optimizer: Literal["adam", "adamw", "sgd", "rmsprop"] = "adam"
+  """Critic optimizer type."""
+  auto_alpha: bool = True
+  """Whether to learn the entropy temperature automatically."""
+  alpha: float = 0.05
+  """Initial entropy temperature."""
+  tau: float = 0.005
+  """Polyak target-network update coefficient."""
+  gamma: float = 0.99
+  """Discount factor."""
+  target_entropy_scale: float = 1.0
+  """Multiplier applied to the default target entropy."""
+  max_grad_norm: float = 1.0
+  """Maximum actor and critic gradient norm."""
+  policy_frequency: int = 2
+  """Number of critic updates between actor updates."""
+  n_steps: int = 3
+  """Number of replay steps used to construct return targets."""
+  rnd_cfg: dict[str, Any] | None = None
+  """Optional random-network-distillation configuration."""
+  symmetry_cfg: dict[str, Any] | None = None
+  """Optional symmetry augmentation configuration."""
+  class_name: str = "SAC"
+  """Algorithm class name resolved by RSL-RL."""
+
+
+@dataclass
 class RslRlBaseRunnerCfg:
   seed: int = 42
   """The seed for the experiment. Default is 42."""
@@ -234,3 +322,19 @@ class RslRlReppoRunnerCfg(RslRlBaseRunnerCfg):
   """Action-conditioned categorical critic configuration."""
   algorithm: RslRlReppoAlgorithmCfg = field(default_factory=RslRlReppoAlgorithmCfg)
   """REPPO algorithm configuration."""
+
+
+@dataclass
+class RslRlSacRunnerCfg(RslRlBaseRunnerCfg):
+  """Runner configuration for replay-based SAC training."""
+
+  class_name: str = "OnPolicyRunner"
+  """Mjlab uses its OnPolicyRunner adapter, which detects replay algorithms."""
+  actor: RslRlSacActorCfg = field(default_factory=RslRlSacActorCfg)
+  """Bounded stochastic actor configuration."""
+  critic: RslRlSacCriticCfg = field(default_factory=RslRlSacCriticCfg)
+  """Twin action-value critic configuration."""
+  algorithm: RslRlSacAlgorithmCfg = field(default_factory=RslRlSacAlgorithmCfg)
+  """SAC algorithm and replay configuration."""
+  start_training: int = 0
+  """Iteration at which replay updates may begin."""

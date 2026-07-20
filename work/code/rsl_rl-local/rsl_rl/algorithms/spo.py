@@ -17,6 +17,13 @@ from rsl_rl.models import MLPModel
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import compile_model, resolve_callable, resolve_obs_groups, resolve_optimizer
 
+from .transition_handling import (
+    compute_gae_returns,
+    configure_timeout_transition,
+    masked_mean,
+    normalize_valid,
+)
+
 
 class SPO:
     """Simple Policy Optimization algorithm.
@@ -146,7 +153,6 @@ class SPO:
             self.rnd.update_normalization(obs)
 
         # Record the rewards and dones
-        # Note: We clone here because later on we bootstrap the rewards based on timeouts
         self.transition.rewards = rewards.clone()
         self.transition.dones = dones
 
@@ -157,12 +163,15 @@ class SPO:
             # Add intrinsic rewards to extrinsic rewards
             self.transition.rewards += self.intrinsic_rewards
 
-        # Bootstrapping on time outs
-        if "time_outs" in extras:
-            self.transition.rewards += self.gamma * torch.squeeze(
-                self.transition.values * extras["time_outs"].unsqueeze(1).to(self.device),  # type: ignore
-                1,
-            )
+        configure_timeout_transition(
+            self.storage,
+            self.transition,
+            obs,
+            dones,
+            extras,
+            self._evaluate_bootstrap_values,
+            self.device,
+        )
 
         # Record the transition
         self.storage.add_transition(self.transition)
@@ -179,24 +188,17 @@ class SPO:
         last_values = self.critic(obs).detach()
         # Restore the critic's hidden state so the next rollout is not affected by the forward pass
         self.critic.reset(hidden_state=critic_hidden_state)
-        # Compute returns and advantages
-        advantage = 0
-        for step in reversed(range(st.num_transitions_per_env)):
-            # If we are at the last step, bootstrap the return value
-            next_values = last_values if step == st.num_transitions_per_env - 1 else st.values[step + 1]
-            # 1 if we are not in a terminal state, 0 otherwise
-            next_is_not_terminal = 1.0 - st.dones[step].float()
-            # TD error: r_t + gamma * V(s_{t+1}) - V(s_t)
-            delta = st.rewards[step] + next_is_not_terminal * self.gamma * next_values - st.values[step]
-            # Advantage: A(s_t, a_t) = delta_t + gamma * lambda * A(s_{t+1}, a_{t+1})
-            advantage = delta + next_is_not_terminal * self.gamma * self.lam * advantage
-            # Return: R_t = A(s_t, a_t) + V(s_t)
-            st.returns[step] = advantage + st.values[step]
-        # Compute the advantages
-        st.advantages = st.returns - st.values
+        compute_gae_returns(st, last_values, self.gamma, self.lam)
         # Normalize the advantages if per minibatch normalization is not used
         if not self.normalize_advantage_per_mini_batch:
-            st.advantages = (st.advantages - st.advantages.mean()) / (st.advantages.std() + 1e-8)
+            st.normalize_advantages()
+
+    def _evaluate_bootstrap_values(self, obs: TensorDict) -> torch.Tensor:
+        """Evaluate final observations without advancing recurrent rollout state."""
+        hidden_state = self.critic.get_hidden_state()
+        values = self.critic(obs).detach()
+        self.critic.reset(hidden_state=hidden_state)
+        return values
 
     # GIỮ NGUYÊN TỪ PPO v5.4.0 trong update(): minibatch, KL schedule,
     # value loss, entropy, RND, symmetry, optimizer và multi-GPU.
@@ -220,11 +222,12 @@ class SPO:
         # Iterate over mini-batches
         for batch in generator:
             original_batch_size = batch.observations.batch_size[0]
+            loss_valid = batch.valid if batch.masks is not None else None
 
             # Check if we should normalize advantages per mini-batch
             if self.normalize_advantage_per_mini_batch:
                 with torch.no_grad():
-                    batch.advantages = (batch.advantages - batch.advantages.mean()) / (batch.advantages.std() + 1e-8)  # type: ignore
+                    batch.advantages = normalize_valid(batch.advantages, loss_valid)  # type: ignore[arg-type]
 
             # Perform symmetric augmentation if enabled
             if self.symmetry:
@@ -248,7 +251,7 @@ class SPO:
             if self.desired_kl is not None and self.schedule == "adaptive":
                 with torch.inference_mode():
                     kl = self.actor.get_kl_divergence(batch.old_distribution_params, distribution_params)  # type: ignore
-                    kl_mean = torch.mean(kl)
+                    kl_mean = masked_mean(kl, loss_valid)
 
                     # Reduce the KL divergence across all GPUs
                     if self.is_multi_gpu:
@@ -275,21 +278,20 @@ class SPO:
             # SPO surrogate loss
             ratio = torch.exp(actions_log_prob - torch.squeeze(batch.old_actions_log_prob))  # type: ignore
             advantages = torch.squeeze(batch.advantages)  # type: ignore
-            surrogate_loss = -(
-                advantages * ratio
-                - advantages.abs() * (ratio - 1.0).pow(2) / (2.0 * self.clip_param)
-            ).mean()
+            surrogate = -(advantages * ratio - advantages.abs() * (ratio - 1.0).pow(2) / (2.0 * self.clip_param))
+            surrogate_loss = masked_mean(surrogate, loss_valid)
 
             # Value function loss
             if self.use_clipped_value_loss:
                 value_clipped = batch.values + (values - batch.values).clamp(-self.clip_param, self.clip_param)
                 value_losses = (values - batch.returns).pow(2)
                 value_losses_clipped = (value_clipped - batch.returns).pow(2)
-                value_loss = torch.max(value_losses, value_losses_clipped).mean()
+                value_loss = masked_mean(torch.max(value_losses, value_losses_clipped), loss_valid)
             else:
-                value_loss = (batch.returns - values).pow(2).mean()
+                value_loss = masked_mean((batch.returns - values).pow(2), loss_valid)
 
-            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
+            entropy_mean = masked_mean(entropy, loss_valid)
+            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_mean
 
             # RND loss
             rnd_loss = self.rnd.compute_loss(batch.observations[:original_batch_size]) if self.rnd else None  # type: ignore
@@ -323,7 +325,7 @@ class SPO:
             # Store the losses
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
-            mean_entropy += entropy.mean().item()
+            mean_entropy += entropy_mean.item()
             # RND loss
             if mean_rnd_loss is not None:
                 mean_rnd_loss += rnd_loss.item()

@@ -4,17 +4,21 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
+
 import copy
-from collections.abc import Iterable
-from itertools import chain
 import torch
 import torch.nn as nn
+from collections.abc import Iterable
+from itertools import chain
 from tensordict import TensorDict
+
 from rsl_rl.env import VecEnv
 from rsl_rl.models import ActionValueModel, MLPModel
 from rsl_rl.modules import Distribution
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import compile_model, resolve_callable, resolve_obs_groups, resolve_optimizer
+
+from .transition_handling import compute_td_lambda_returns, configure_timeout_transition
 
 
 class REPPO:
@@ -76,7 +80,9 @@ class REPPO:
             raise ValueError("max_grad_norm must be positive.")
         rollout_size = storage.num_envs * storage.num_transitions_per_env
         if rollout_size % num_mini_batches != 0:
-            raise ValueError(f"Rollout size ({rollout_size}) must be divisible by num_mini_batches ({num_mini_batches}).")
+            raise ValueError(
+                f"Rollout size ({rollout_size}) must be divisible by num_mini_batches ({num_mini_batches})."
+            )
         self.device = device
         self.is_multi_gpu = multi_gpu_cfg is not None
         if multi_gpu_cfg is None:
@@ -135,20 +141,31 @@ class REPPO:
         self.transition.actions = actions.detach()
         self.transition.values = self.critic(obs, self.transition.actions).detach()
         self.transition.actions_log_prob = self._raw_actor.get_output_log_prob(self.transition.actions).detach()
-        self.transition.distribution_params = tuple((parameter.detach() for parameter in self._raw_actor.output_distribution_params))
+        self.transition.distribution_params = tuple(
+            parameter.detach() for parameter in self._raw_actor.output_distribution_params
+        )
         self.transition.observations = obs
         return self.transition.actions
 
-    def process_env_step(self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]) -> None:
+    def process_env_step(
+        self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]
+    ) -> None:
         """Store a rollout step with the maximum-entropy reward correction."""
         self.actor.update_normalization(obs)
         self.critic.update_normalization(obs)
-        time_outs = extras.get("time_outs", torch.zeros_like(dones, dtype=torch.bool)).to(self.device).bool()
         self.transition.dones = dones.bool()
         augmented_rewards = rewards.clone()
-        augmented_rewards += self.gamma * self.transition.values.squeeze(-1) * time_outs.float()
         augmented_rewards -= self.gamma * self.alpha_temp.detach() * self.transition.actions_log_prob
         self.transition.rewards = augmented_rewards
+        configure_timeout_transition(
+            self.storage,
+            self.transition,
+            obs,
+            dones,
+            extras,
+            self._evaluate_bootstrap_values,
+            self.device,
+        )
         self.storage.add_transition(self.transition)
         self.transition.clear()
         self.actor.reset(dones)
@@ -158,14 +175,12 @@ class REPPO:
         """Compute generalized on-policy Q targets with a backward TD-lambda pass."""
         last_actions = self.actor(obs, stochastic_output=True).detach()
         last_values = self.critic(obs, last_actions).detach()
-        recursive_value = last_values
-        for step in reversed(range(self.storage.num_transitions_per_env)):
-            next_values = last_values if step == self.storage.num_transitions_per_env - 1 else self.storage.values[step + 1]
-            next_is_not_terminal = 1.0 - self.storage.dones[step].float()
-            one_step_bootstrap = next_is_not_terminal * self.gamma * next_values
-            multi_step_bootstrap = next_is_not_terminal * self.gamma * recursive_value
-            recursive_value = self.storage.rewards[step] + (1.0 - self.lam) * one_step_bootstrap + self.lam * multi_step_bootstrap
-            self.storage.returns[step] = recursive_value
+        compute_td_lambda_returns(self.storage, last_values, self.gamma, self.lam)
+
+    def _evaluate_bootstrap_values(self, obs: TensorDict) -> torch.Tensor:
+        """Estimate the soft action value at supplied final observations."""
+        actions = self.actor(obs, stochastic_output=True).detach()
+        return self.critic(obs, actions).detach()
 
     def update(self) -> dict[str, float]:
         """Fit the categorical critic first, then optimize the constrained actor."""
@@ -201,7 +216,9 @@ class REPPO:
         critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.critic_optimizer.step()
         prediction_error = (values.detach() - batch.returns).abs().mean()
-        target_saturation = ((batch.returns <= self._raw_critic.vmin) | (batch.returns >= self._raw_critic.vmax)).float().mean()
+        target_saturation = (
+            ((batch.returns <= self._raw_critic.vmin) | (batch.returns >= self._raw_critic.vmax)).float().mean()
+        )
         return {
             "value": value_loss.detach().item(),
             "value_prediction_error": prediction_error.item(),
@@ -228,7 +245,9 @@ class REPPO:
                 old_log_prob = old_distribution.log_prob(old_actions)
             new_log_prob = distribution.log_prob(old_actions)
             kl = (old_log_prob - new_log_prob).mean(dim=0)
-            constrained_actor_loss = torch.where((kl < self.desired_kl).detach(), primary_actor_loss, self.alpha_kl.detach() * kl).mean()
+            constrained_actor_loss = torch.where(
+                (kl < self.desired_kl).detach(), primary_actor_loss, self.alpha_kl.detach() * kl
+            ).mean()
             temperature_loss = self.alpha_temp * (entropy.mean() - self.target_entropy).detach()
             kl_multiplier_loss = self.alpha_kl * (self.desired_kl - kl.mean()).detach()
             actor_loss = constrained_actor_loss + temperature_loss + kl_multiplier_loss

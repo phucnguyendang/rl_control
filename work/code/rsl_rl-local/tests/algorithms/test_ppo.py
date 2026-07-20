@@ -200,29 +200,31 @@ class TestGAEComputation:
 class TestTimeoutBootstrapping:
     """Tests for timeout bootstrapping in ``process_env_step``."""
 
-    def test_timeout_adds_bootstrap_to_reward(self) -> None:
-        """When time_outs is set, stored reward should include gamma * value * timeout."""
+    def test_missing_final_observation_drops_timeout_and_marks_previous_boundary(self) -> None:
+        """A timeout without final observation must not learn from the reset state."""
         ppo, obs = _build_ppo()
 
-        # Manually act to populate transition.values
+        # Store one normal transition first.
         ppo.act(obs)
-        stored_values = ppo.transition.values.clone()
+        ppo.process_env_step(obs, torch.ones(NUM_ENVS), torch.zeros(NUM_ENVS), {})
 
+        # The next transition times out only in env 0 and has no final observation.
+        ppo.act(obs)
+        timeout_values = ppo.transition.values.clone()
         raw_reward = torch.ones(NUM_ENVS)
-        dones = torch.ones(NUM_ENVS)
+        dones = torch.zeros(NUM_ENVS)
+        dones[0] = 1.0
         time_outs = torch.zeros(NUM_ENVS)
-        time_outs[0] = 1.0  # Only env 0 times out
+        time_outs[0] = 1.0
 
         ppo.process_env_step(obs, raw_reward, dones, {"time_outs": time_outs})
 
-        # The stored reward for env 0 should be: 1.0 + gamma * value[0]
-        stored_reward_env0 = ppo.storage.rewards[0, 0, 0].item()
-        expected = 1.0 + ppo.gamma * stored_values[0, 0].item()
-        assert abs(stored_reward_env0 - expected) < 1e-5
-
-        # Env 1 should have raw reward only
-        stored_reward_env1 = ppo.storage.rewards[0, 1, 0].item()
-        assert abs(stored_reward_env1 - 1.0) < 1e-5
+        assert not ppo.storage.valid[1, 0, 0]
+        assert ppo.storage.valid[1, 1, 0]
+        assert ppo.storage.bootstrap[0, 0, 0]
+        assert torch.allclose(ppo.storage.bootstrap_values[0, 0], timeout_values[0])
+        # Rewards are never rewritten; the invalid timeout reward is simply excluded.
+        assert torch.isclose(ppo.storage.rewards[1, 0, 0], torch.tensor(1.0))
 
 
 class TestPPOLosses:

@@ -133,6 +133,35 @@ def _build_runner(log_dir: str | None = None, model_type: str = "mlp") -> OnPoli
     return OnPolicyRunner(env, cfg, log_dir=log_dir, device="cpu")
 
 
+def _make_sac_cfg() -> dict:
+    """Return a minimal SAC config routed through the existing runner entrypoint."""
+    return {
+        "num_steps_per_env": 2,
+        "save_interval": 100,
+        "start_training": 0,
+        "obs_groups": {"actor": ["policy"], "critic": ["policy"]},
+        "actor": {
+            "class_name": "SACActorModel",
+            "hidden_dims": [32, 32],
+        },
+        "critic": {
+            "class_name": "SACCriticModel",
+            "hidden_dims": [32, 32],
+        },
+        "algorithm": {
+            "class_name": "SAC",
+            "replay_buffer_size": 128,
+            "num_learning_epochs": 1,
+            "num_mini_batches": 1,
+            "mini_batch_size": 8,
+            "policy_frequency": 1,
+            "n_steps": 2,
+            "rnd_cfg": None,
+            "symmetry_cfg": None,
+        },
+    }
+
+
 class TestRunnerConstruction:
     """Tests for constructing the runner and its components."""
 
@@ -170,6 +199,17 @@ class TestLearnLoop:
         runner = _build_runner()
         runner.learn(num_learning_iterations=3)
         assert runner.current_learning_iteration == 2
+
+    def test_existing_runner_entrypoint_supports_sac(self) -> None:
+        """Replay algorithms should run without replacing Mjlab's runner class."""
+        runner = OnPolicyRunner(DummyEnv(), _make_sac_cfg(), log_dir=None, device="cpu")
+        assert runner.is_off_policy
+        params_before = {name: parameter.clone() for name, parameter in runner.alg.actor.named_parameters()}
+        runner.learn(num_learning_iterations=2)
+        assert runner.alg.replay_buffer.num_valid_transitions > 0
+        assert any(
+            not torch.equal(params_before[name], parameter) for name, parameter in runner.alg.actor.named_parameters()
+        )
 
 
 class TestSaveLoad:

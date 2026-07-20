@@ -5,5 +5,9 @@ from mjlab.rl.config import RslRlPpoAlgorithmCfg as RslRlPpoAlgorithmCfg
 from mjlab.rl.config import RslRlReppoAlgorithmCfg as RslRlReppoAlgorithmCfg
 from mjlab.rl.config import RslRlReppoCriticCfg as RslRlReppoCriticCfg
 from mjlab.rl.config import RslRlReppoRunnerCfg as RslRlReppoRunnerCfg
+from mjlab.rl.config import RslRlSacActorCfg as RslRlSacActorCfg
+from mjlab.rl.config import RslRlSacAlgorithmCfg as RslRlSacAlgorithmCfg
+from mjlab.rl.config import RslRlSacCriticCfg as RslRlSacCriticCfg
+from mjlab.rl.config import RslRlSacRunnerCfg as RslRlSacRunnerCfg
 from mjlab.rl.runner import MjlabOnPolicyRunner as MjlabOnPolicyRunner
 from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper as RslRlVecEnvWrapper

@@ -328,3 +328,382 @@ THe limitation of REPPO is action space are continuous, policy can reparameteriz
 - REPPO dùng foward KL? Why and what is the difference meaning of forward KL and reverse KL?
 - Tại sao quá trình training critic phải thêm entropy vào hàm loss?
 ----
+
+
+# Simple Policy Optimization
+
+## Problem and motivation
+
+Policy-gradient methods face two central practical challenges:
+
+1. **Gradient estimation:** the policy-gradient estimator should have low variance while retaining low bias.
+2. **Policy-update step size:** an excessively large update may collapse policy performance, whereas an overly small update harms sample efficiency.
+
+TRPO addresses the second challenge by optimizing a policy-improvement lower bound inside a trust region. This gives strong theoretical support for monotonic policy improvement, but its constrained second-order optimization is computationally inefficient and difficult to extend to large-scale reinforcement-learning systems.
+
+PPO replaces TRPO's constrained second-order update with a first-order clipped-ratio objective. This makes PPO simple, scalable, and effective in practice. However, ratio clipping does not reliably keep probability ratios inside the intended trust region. Once a sample is clipped in the direction that improves the objective, its gradient becomes zero. The missing corrective gradient allows its ratio to drift farther outside the desired range as optimization continues. Consequently, PPO often depends on additional code-level mechanisms, such as adaptive learning rates or early stopping, to avoid destructive policy updates.
+
+The central question of the paper is:
+
+> Can the theoretical robustness of TRPO and the implementation simplicity of PPO be combined in a single unconstrained first-order algorithm?
+
+SPO answers this question by changing only the policy loss. It replaces PPO's clipping behavior with a quadratic objective whose optimum for each sample is located at the appropriate probability-ratio boundary:
+
+$$
+r_t^* = 1 + \operatorname{sign}(\hat A_t)\epsilon.
+$$
+
+This design aims to:
+
+- optimize a tighter policy-improvement lower bound associated with a Total Variation divergence trust region;
+- retain corrective gradients for all samples and constrain probability-ratio deviations more effectively;
+- preserve PPO's simple first-order implementation, with the policy objective as the only required algorithmic change.
+
+## Methodology
+
+PPO attempts to limit the differences between successive policies through ratio clipping. However, Wang et al. (2020) proved the following theorem:
+
+> **Theorem 4.1.** (Wang et al., 2020) For discrete action space tasks where $|\mathcal A| \ge 3$ or continuous action space tasks where the output of the policy $\pi_\theta$ follows a multivariate Gaussian distribution. Let
+>
+> $$
+> \Theta = \{\theta \mid 1-\epsilon \le r_t(\theta) \le 1+\epsilon\},
+> $$
+>
+> we have
+>
+> $$
+> \sup_{\theta\in\Theta}
+> D_{\mathrm{KL}}(\pi_{\theta_{\mathrm{old}}}\parallel\pi_\theta)[s_t]
+> = +\infty
+> $$
+>
+> for both discrete and continuous action space tasks.
+
+Theorem 4.1 demonstrates that $D_{\mathrm{KL}}(\pi_{\theta_{\mathrm{old}}}\parallel\pi_\theta)[s_t]$ is not necessarily bounded even if the probability ratio $r_t(\theta)$ is bounded. However, this theorem considers only an extreme case involving a single data point, which is less typical than the batch processing used in training data. On a broader scale, the heuristic clipping technique employed by PPO aims to bound the TV divergence for sufficient batch sizes (Queeney et al., 2021). This relationship is formalized as
+
+$$
+\mathbb E_{s\sim\rho_\pi(\cdot)}
+\left[D_{\mathrm{TV}}(\pi\parallel\tilde\pi)[s]\right]
+=
+\frac{1}{2}
+\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
+\left[
+\left|\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}-1\right|
+\right].
+\tag{9}
+$$
+
+Then, the performance improvement lower bound (3) can be rewritten as
+
+$$
+\begin{aligned}
+\eta(\tilde\pi)-\eta(\pi)
+\ge{}&
+\frac{1}{1-\gamma}
+\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
+\left[
+\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
+\right]\\
+&-
+\frac{\xi\gamma}{(1-\gamma)^2}
+\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
+\left[
+\left|\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}-1\right|
+\right].
+\end{aligned}
+\tag{10}
+$$
+
+This explains why PPO attempts to limit the probability ratio
+
+$$
+\left|\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}-1\right|\le\epsilon,
+$$
+
+as this enforces a TV divergence trust region in expectation.
+
+Finally, we also found that PPO, which aims to bound the TV divergence, can offer a larger solution space compared to methods that incorporate a looser KL divergence as a constraint (e.g., in TRPO). To illustrate this, we present the following proposition:
+
+> **Proposition 4.2.** Given the old policy $\pi$, define the solution spaces under the TV and KL divergence constraints as follows:
+
+$$
+\begin{aligned}
+\Omega_{\mathrm{TV}}
+&=
+\{\tilde\pi\mid D_{\mathrm{TV}}(\pi\parallel\tilde\pi)[s]\le\delta_{\mathrm{TV}},\ \forall s\in\mathcal S\},\\
+\Omega_{\mathrm{KL}}
+&=
+\{\tilde\pi\mid D_{\mathrm{KL}}(\pi\parallel\tilde\pi)[s]\le\delta_{\mathrm{KL}},\ \forall s\in\mathcal S\},
+\end{aligned}
+\tag{11}
+$$
+
+where $\delta_{\mathrm{KL}}>0$ is a predefined threshold. Let
+
+$$
+\delta_{\mathrm{TV}}\ge\sqrt{\frac{1}{2}\delta_{\mathrm{KL}}},
+$$
+
+we establish that $\Omega_{\mathrm{KL}}\subset\Omega_{\mathrm{TV}}$.
+
+*Proof.* For any given $\delta_{\mathrm{KL}}$ and $\tilde\pi\in\Omega_{\mathrm{KL}}$, using Pinsker's inequality, we have
+
+$$
+D_{\mathrm{TV}}(\pi\parallel\tilde\pi)[s]
+\le
+\sqrt{\frac{1}{2}D_{\mathrm{KL}}(\pi\parallel\tilde\pi)[s]}
+\le
+\sqrt{\frac{1}{2}\delta_{\mathrm{KL}}}
+\le
+\delta_{\mathrm{TV}},
+$$
+
+therefore $\tilde\pi\in\Omega_{\mathrm{KL}}\Longrightarrow\tilde\pi\in\Omega_{\mathrm{TV}}$, which means $\Omega_{\mathrm{KL}}\subset\Omega_{\mathrm{TV}}$, concluding the proof. $\square$
+
+Additionally, the optimal solution to the lower bound in the TV divergence solution space, $\Omega_{\mathrm{TV}}$, is expected to be superior. We now present the following theorem:
+
+> **Theorem 4.3.** Given the old policy $\pi$, and $\Omega_{\mathrm{TV}},\Omega_{\mathrm{KL}}$ presented in Proposition 4.2, let
+
+$$
+\begin{aligned}
+\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi)
+={}&
+\frac{1}{1-\gamma}
+\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
+\left[
+\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
+\right]\\
+&-
+\frac{2\xi\gamma}{(1-\gamma)^2}
+\mathbb E_{s\sim\rho_\pi(\cdot)}
+\left[D_{\mathrm{TV}}(\pi\parallel\tilde\pi)[s]\right],\\[4pt]
+\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi)
+={}&
+\frac{1}{1-\gamma}
+\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
+\left[
+\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
+\right]\\
+&-
+\frac{2\xi\gamma}{(1-\gamma)^2}
+\mathbb E_{s\sim\rho_\pi(\cdot)}
+\left[
+\sqrt{\frac{1}{2}D_{\mathrm{KL}}(\pi\parallel\tilde\pi)[s]}
+\right]
+\end{aligned}
+\tag{12}
+$$
+
+be the lower bounds of performance improvement with TV divergence and KL divergence. Let
+
+$$
+\delta_{\mathrm{TV}}\ge\sqrt{\frac{1}{2}\delta_{\mathrm{KL}}},
+$$
+
+denote
+
+$$
+\tilde\pi_{\mathrm{TV}}^*
+=
+\underset{\tilde\pi\in\Omega_{\mathrm{TV}}}{\arg\max}\,
+\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi),
+\qquad
+\tilde\pi_{\mathrm{KL}}^*
+=
+\underset{\tilde\pi\in\Omega_{\mathrm{KL}}}{\arg\max}\,
+\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi),
+\tag{13}
+$$
+
+then
+
+$$
+\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi_{\mathrm{TV}}^*)
+\ge
+\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi_{\mathrm{KL}}^*).
+$$
+
+*Proof.* Since $\Omega_{\mathrm{KL}}\subset\Omega_{\mathrm{TV}}$, we have
+
+$$
+\begin{aligned}
+\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi_{\mathrm{TV}}^*)
+&\ge
+\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi_{\mathrm{KL}}^*)\\
+&=
+\frac{1}{1-\gamma}
+\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
+\left[
+\frac{\tilde\pi_{\mathrm{KL}}^*(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
+\right]\\
+&\quad-
+\frac{2\xi\gamma}{(1-\gamma)^2}
+\mathbb E_{s\sim\rho_\pi(\cdot)}
+\left[D_{\mathrm{TV}}(\pi\parallel\tilde\pi_{\mathrm{KL}}^*)[s]\right]\\
+&\ge
+\frac{1}{1-\gamma}
+\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
+\left[
+\frac{\tilde\pi_{\mathrm{KL}}^*(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
+\right]\\
+&\quad-
+\frac{2\xi\gamma}{(1-\gamma)^2}
+\mathbb E_{s\sim\rho_\pi(\cdot)}
+\left[
+\sqrt{\frac{1}{2}D_{\mathrm{KL}}(\pi\parallel\tilde\pi_{\mathrm{KL}}^*)[s]}
+\right]\\
+&=
+\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi_{\mathrm{KL}}^*),
+\end{aligned}
+\tag{14}
+$$
+
+thus $\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi_{\mathrm{TV}}^*)\ge\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi_{\mathrm{KL}}^*)$, concluding the proof. $\square$
+
+> **Conclusion**
+>
+> Optimizing the lower bound with TV divergence constrains offers a more effective solution space than using KL divergence constrains, leading to better policy improvement.
+
+As a result, to optimize the lower bound (10), we aim to solve the following constrained optimization problem:
+
+$$
+\begin{aligned}
+\max_\theta\quad
+&\mathbb E_{(s_t,a_t)\sim\pi_{\theta_{\mathrm{old}}}}
+\left[r_t(\theta)\cdot\hat A_t\right],\\
+\text{s.t.}\quad
+&\mathbb E_{(s_t,a_t)\sim\pi_{\theta_{\mathrm{old}}}}
+\left[|r_t(\theta)-1|\right]\le\epsilon,
+\end{aligned}
+\tag{15}
+$$
+
+where
+
+$$
+r_t(\theta)
+=
+\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)},
+\qquad
+\hat A_t=\hat A(s_t,a_t).
+$$
+
+PPO attempts to satisfy the constraints of (15) through ratio clipping, but this does not prevent excessive ratio deviations (demonstrated in Figure 2). The underlying reason is that ratio clipping causes certain data points to stop contributing to the gradients. Over multiple iterations, this can lead to uncontrollable updates, as the absence of corrective gradients prevents the policy from recovering. To overcome this issue with ratio clipping, we propose the following objective:
+
+$$
+J(\theta)
+=
+\mathbb E_{(s_t,a_t)\sim\pi_{\theta_{\mathrm{old}}}}
+\left\{
+r_t(\theta)\cdot\hat A_t
+-
+\frac{|\hat A_t|}{2\epsilon}\cdot[r_t(\theta)-1]^2
+\right\}.
+\tag{16}
+$$
+
+The details of the objective will be discussed in the following section, and the pseudo-code is shown in Algorithm 1.
+
+### Algorithm 1 - Simple Policy Optimization (SPO)
+
+| Line | Procedure |
+|---:|---|
+| 1 | **Initialize:** Policy and value networks $\pi_\theta,V_\phi$, hyperparameter $\epsilon$, value loss and policy entropy coefficients $c_1,c_2$. |
+| 2 | **Output:** Optimal policy network $\pi_\theta^*$. |
+| 3 | **while** not converged **do** |
+| 4 | &emsp;`# Data collection` |
+| 5 | &emsp;Collect data $\mathcal D=\{(s_t,a_t,r_t)\}_{t=1}^{N}$ using the current policy network $\pi_\theta$. |
+| 6 | &emsp;`# The networks before updating` |
+| 7 | &emsp;$\pi_{\theta_{\mathrm{old}}}\leftarrow\pi_\theta,\quad V_{\phi_{\mathrm{old}}}\leftarrow V_\phi$. |
+| 8 | &emsp;`# Estimate the advantage` $\hat A(s_t,a_t)$ `based on` $V_{\phi_{\mathrm{old}}}$. |
+| 9 | &emsp;Use GAE (Schulman et al., 2015b) technique to estimate the advantage $\hat A(s_t,a_t)$. |
+| 10 | &emsp;`# Estimate the return` $\hat R_t$. |
+| 11 | &emsp;$\hat R_t\leftarrow V_{\phi_{\mathrm{old}}}(s_t)+\hat A(s_t,a_t)$. |
+| 12 | &emsp;**for** each training epoch **do** |
+| 13 | &emsp;&emsp;`# Compute policy loss` $\mathcal L_p$ **(This is the only difference between SPO and PPO)**. |
+| 14 | &emsp;&emsp;$\displaystyle \mathcal L_p\leftarrow-\frac{1}{N}\sum_{t=1}^{N}\left\{\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)}\hat A(s_t,a_t)-\frac{|\hat A(s_t,a_t)|}{2\epsilon}\left[\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)}-1\right]^2\right\}$. |
+| 15 | &emsp;&emsp;`# Compute policy entropy` $\mathcal L_e$ `and value loss` $\mathcal L_v$. |
+| 16 | &emsp;&emsp;$\displaystyle \mathcal L_e\leftarrow\frac{1}{N}\sum_{t=1}^{N}\mathcal H(\pi_\theta(\cdot\mid s_t)),\qquad \mathcal L_v\leftarrow\frac{1}{2N}\sum_{t=1}^{N}[V_\phi(s_t)-\hat R_t]^2$. |
+| 17 | &emsp;&emsp;`# Compute total loss` $\mathcal L$. |
+| 18 | &emsp;&emsp;$\mathcal L\leftarrow\mathcal L_p+c_1\mathcal L_v-c_2\mathcal L_e$. |
+| 19 | &emsp;&emsp;`# Update parameters` $\theta$ `and` $\phi$ `through backpropagation,` $\lambda_\theta$ `and` $\lambda_\phi$ `is the step sizes`. |
+| 20 | &emsp;&emsp;$\theta\leftarrow\theta-\lambda_\theta\nabla_\theta\mathcal L,\qquad\phi\leftarrow\phi-\lambda_\phi\nabla_\phi\mathcal L$. |
+| 21 | &emsp;**end for** |
+| 22 | **end while** |
+
+## Theoretical Results
+
+In this section, we provide some theoretical insights of the differences between PPO and SPO, demonstrating that SPO can be more effective in constraining probability ratios.
+
+### 5.1. Objective Class
+
+Simplify the notation by using $r$ and $A$ to represent the probability ratio and the advantage value. Based on the previous analysis, our goal is to find an objective function $f(r,A,\epsilon)$ such that while optimizing the surrogate objective $rA$, the probability ratio is constrained by $|r-1|\le\epsilon$. According to (15), for any given $A\ne0$ and $\epsilon>0$, we can write down the following desired optimization problem:
+
+$$
+\max_r\ rA,
+\qquad
+\text{s.t.}\quad |r-1|\le\epsilon.
+\tag{17}
+$$
+
+The objective is linear, so the optimal solution is
+
+$$
+r^*=1+\operatorname{sign}(A)\cdot\epsilon,
+$$
+
+where $\operatorname{sign}(\cdot)$ is the sign function. Motivated by this, we present the following definition:
+
+> **Definition 5.1 ($\epsilon$-aligned).** For any given $A\ne0$ and $\epsilon>0$, we say that the function $f(r,A,\epsilon)$ is $\epsilon$-aligned, if it is differentiable and convex with respect to $r$, and attains its maximum value at
+>
+> $$
+> r=1+\operatorname{sign}(A)\cdot\epsilon.
+> $$
+
+The objective of PPO in (6) and SPO in (16) can be expressed as
+
+$$
+\begin{aligned}
+f_{\mathrm{ppo}}
+&=
+\min\left[rA,\operatorname{clip}(r,1-\epsilon,1+\epsilon)A\right],\\
+f_{\mathrm{spo}}
+&=
+rA-\frac{|A|}{2\epsilon}\cdot(r-1)^2.
+\end{aligned}
+\tag{18}
+$$
+
+It can be obtained that $f_{\mathrm{ppo}}$ is not $\epsilon$-aligned, as $f_{\mathrm{ppo}}$ zeros the gradients under some special cases according to (8). For $f_{\mathrm{spo}}$, we have the following theorem:
+
+> **Theorem 5.2.** $f_{\mathrm{spo}}$ is $\epsilon$-aligned.
+
+*Proof.* Obviously, $f_{\mathrm{spo}}$ is differentiable and convex with respect to $r$ since $f_{\mathrm{spo}}$ is a quadratic polynomial of $r$. For any given $A\ne0$ and $\epsilon>0$, let $\partial f_{\mathrm{spo}}(r,A,\epsilon)/\partial r=0$, then
+
+$$
+\frac{\partial f_{\mathrm{spo}}(r,A,\epsilon)}{\partial r}
+=
+A-\frac{|A|}{\epsilon}\cdot(r-1)
+=0,
+\tag{19}
+$$
+
+thus $r=1+\operatorname{sign}(A)\cdot\epsilon$ is the optimal solution for $f_{\mathrm{spo}}$. $\square$
+
+Note that $f_{\mathrm{spo}}$ is not the only objective function that satisfies the definition. It can be proved that there is a simple objective function
+
+$$
+f_{\mathrm{simple}}
+=
+-(r-1-\operatorname{sign}(A)\cdot\epsilon)^2,
+$$
+
+which is also $\epsilon$-aligned. We will discuss the differences between these two in Section 6.3.
+
+### 5.2. Analysis of New Objective
+
+We show that the optimization process of SPO can more effectively bound the probability ratio, as can be seen from Figure 3. The largest circular area in the figure represents the boundary on the probability ratio. The green circles represent data points with non-zero gradients during the training process, while the gray circles represent data points with zero gradients.
+
+![Figure 3. In PPO, certain data points exhibit zero gradients, while in SPO, all data points generate non-zero gradients that guide towards the constraint boundary.](image.png)
+
+During the training process of PPO, certain data points that exceed the probability ratio bound cease to provide gradients. In contrast, all data points in SPO contribute gradients that guide the optimization towards the constraint boundary. As training progresses, PPO will accumulate more gray circles that no longer provide gradients and may be influenced by the harmful gradients from green circles. This phenomenon could potentially push the gray circles further away from the constraint boundary. In contrast, the gradient directions of all data points in SPO point towards the constraint boundary. This indicates that SPO imposes stronger constraints on the probability ratio.

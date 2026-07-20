@@ -9,6 +9,7 @@ from .cnn_model import CNNModel
 from .mlp_model import MLPModel
 from .reppo_models import ActionValueModel, LayerNormMLPModel
 from .rnn_model import RNNModel
+from .sac_models import SACActorModel, SACCriticModel
 
 __all__ = [
     "ActionValueModel",
@@ -16,5 +17,6 @@ __all__ = [
     "LayerNormMLPModel",
     "MLPModel",
     "RNNModel",
+    "SACActorModel",
+    "SACCriticModel",
 ]
-

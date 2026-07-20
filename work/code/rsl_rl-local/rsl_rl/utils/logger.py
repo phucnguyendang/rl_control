@@ -56,7 +56,7 @@ class Logger:
         self.cur_episode_length = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
 
         # Create RND buffers
-        if self.cfg["algorithm"]["rnd_cfg"]:
+        if self.cfg["algorithm"].get("rnd_cfg"):
             self.erewbuffer = deque(maxlen=100)
             self.irewbuffer = deque(maxlen=100)
             self.cur_ereward_sum = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
@@ -164,6 +164,8 @@ class Logger:
         learning_rate: float,
         action_std: torch.Tensor,
         rnd_weight: float | None,
+        alpha: float | None = None,
+        collection_size_override: int | None = None,
         print_minimal: bool = False,
         width: int = 80,
         pad: int = 40,
@@ -173,7 +175,9 @@ class Logger:
         If videos are available, they are uploaded to the logging service (W&B) as well.
         """
         if self.writer is not None:
-            collection_size = self.cfg["num_steps_per_env"] * self.num_envs * self.gpu_world_size
+            collection_size = collection_size_override or (
+                self.cfg["num_steps_per_env"] * self.num_envs * self.gpu_world_size
+            )
             iteration_time = collect_time + learn_time
             self.tot_timesteps += collection_size
             self.tot_time += iteration_time
@@ -209,6 +213,8 @@ class Logger:
 
             # Log std
             self.writer.add_scalar("Policy/mean_std", action_std.mean().item(), it)
+            if alpha is not None:
+                self.writer.add_scalar("Policy/alpha", alpha, it)
 
             # Log performance
             fps = int(collection_size / (collect_time + learn_time))
@@ -218,7 +224,7 @@ class Logger:
 
             # Log rewards and episode length
             if len(self.rewbuffer) > 0:
-                if self.cfg["algorithm"]["rnd_cfg"]:
+                if self.cfg["algorithm"].get("rnd_cfg"):
                     self.writer.add_scalar("Rnd/mean_extrinsic_reward", statistics.mean(self.erewbuffer), it)
                     self.writer.add_scalar("Rnd/mean_intrinsic_reward", statistics.mean(self.irewbuffer), it)
                     self.writer.add_scalar("Rnd/weight", rnd_weight, it)  # type: ignore
@@ -254,7 +260,7 @@ class Logger:
 
             # Print rewards and episode length
             if len(self.rewbuffer) > 0:
-                if self.cfg["algorithm"]["rnd_cfg"]:
+                if self.cfg["algorithm"].get("rnd_cfg"):
                     log_string += f"""{"Mean extrinsic reward:":>{pad}} {statistics.mean(self.erewbuffer):.2f}\n"""
                     log_string += f"""{"Mean intrinsic reward:":>{pad}} {statistics.mean(self.irewbuffer):.2f}\n"""
                 log_string += f"""{"Mean reward:":>{pad}} {statistics.mean(self.rewbuffer):.2f}\n"""
@@ -262,6 +268,8 @@ class Logger:
 
             # Print std
             log_string += f"""{"Mean action std:":>{pad}} {action_std.mean().item():.2f}\n"""
+            if alpha is not None:
+                log_string += f"""{"Entropy alpha:":>{pad}} {alpha:.4f}\n"""
 
             # Print episode extras
             if not print_minimal:

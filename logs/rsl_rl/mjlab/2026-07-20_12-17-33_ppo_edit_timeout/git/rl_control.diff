@@ -1,0 +1,2129 @@
+--- git commit ---
+9235c5249eb997cccd6d04b40f0d8b4655b11e5d
+
+
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   week3/PPO.md
+	modified:   work/code/mjlab-local/mjlab/rl/__init__.py
+	modified:   work/code/mjlab-local/mjlab/rl/config.py
+	modified:   work/code/mjlab-local/mjlab/tasks/cartpole/__init__.py
+	modified:   work/code/mjlab-local/mjlab/tasks/cartpole/cartpole_env_cfg.py
+	modified:   work/code/rsl_rl-local/docs/index.rst
+	modified:   work/code/rsl_rl-local/rsl_rl/algorithms/__init__.py
+	modified:   work/code/rsl_rl-local/rsl_rl/algorithms/ppo.py
+	modified:   work/code/rsl_rl-local/rsl_rl/algorithms/reppo.py
+	modified:   work/code/rsl_rl-local/rsl_rl/algorithms/sac.py
+	modified:   work/code/rsl_rl-local/rsl_rl/algorithms/spo.py
+	modified:   work/code/rsl_rl-local/rsl_rl/models/__init__.py
+	modified:   work/code/rsl_rl-local/rsl_rl/modules/distribution.py
+	modified:   work/code/rsl_rl-local/rsl_rl/runners/__init__.py
+	modified:   work/code/rsl_rl-local/rsl_rl/runners/on_policy_runner.py
+	modified:   work/code/rsl_rl-local/rsl_rl/storage/__init__.py
+	modified:   work/code/rsl_rl-local/rsl_rl/storage/rollout_storage.py
+	modified:   work/code/rsl_rl-local/rsl_rl/utils/logger.py
+	modified:   work/code/rsl_rl-local/tests/algorithms/test_ppo.py
+	modified:   work/code/rsl_rl-local/tests/runners/test_on_policy_runner.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	MUJOCO_LOG.TXT
+	logs/
+	wandb/
+	week3/image.png
+	work/code/rsl_rl-local/docs/guide/sac.rst
+	work/code/rsl_rl-local/rsl_rl/algorithms/transition_handling.py
+	work/code/rsl_rl-local/rsl_rl/models/sac_models.py
+	work/code/rsl_rl-local/rsl_rl/runners/off_policy_runner.py
+	work/code/rsl_rl-local/rsl_rl/storage/replay_buffer.py
+	work/code/rsl_rl-local/tests/algorithms/test_sac.py
+	work/code/rsl_rl-local/tests/storage/test_replay_buffer.py
+	work/code/rsl_rl-local/tests/storage/test_timeout_boundaries.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/week3/PPO.md b/week3/PPO.md
+index f731590..5488b2e 100644
+--- a/week3/PPO.md
++++ b/week3/PPO.md
+@@ -327,4 +327,383 @@ THe limitation of REPPO is action space are continuous, policy can reparameteriz
+ ------
+ - REPPO dùng foward KL? Why and what is the difference meaning of forward KL and reverse KL?
+ - Tại sao quá trình training critic phải thêm entropy vào hàm loss?
+-----
+\ No newline at end of file
++----
++
++
++# Simple Policy Optimization
++
++## Problem and motivation
++
++Policy-gradient methods face two central practical challenges:
++
++1. **Gradient estimation:** the policy-gradient estimator should have low variance while retaining low bias.
++2. **Policy-update step size:** an excessively large update may collapse policy performance, whereas an overly small update harms sample efficiency.
++
++TRPO addresses the second challenge by optimizing a policy-improvement lower bound inside a trust region. This gives strong theoretical support for monotonic policy improvement, but its constrained second-order optimization is computationally inefficient and difficult to extend to large-scale reinforcement-learning systems.
++
++PPO replaces TRPO's constrained second-order update with a first-order clipped-ratio objective. This makes PPO simple, scalable, and effective in practice. However, ratio clipping does not reliably keep probability ratios inside the intended trust region. Once a sample is clipped in the direction that improves the objective, its gradient becomes zero. The missing corrective gradient allows its ratio to drift farther outside the desired range as optimization continues. Consequently, PPO often depends on additional code-level mechanisms, such as adaptive learning rates or early stopping, to avoid destructive policy updates.
++
++The central question of the paper is:
++
++> Can the theoretical robustness of TRPO and the implementation simplicity of PPO be combined in a single unconstrained first-order algorithm?
++
++SPO answers this question by changing only the policy loss. It replaces PPO's clipping behavior with a quadratic objective whose optimum for each sample is located at the appropriate probability-ratio boundary:
++
++$$
++r_t^* = 1 + \operatorname{sign}(\hat A_t)\epsilon.
++$$
++
++This design aims to:
++
++- optimize a tighter policy-improvement lower bound associated with a Total Variation divergence trust region;
++- retain corrective gradients for all samples and constrain probability-ratio deviations more effectively;
++- preserve PPO's simple first-order implementation, with the policy objective as the only required algorithmic change.
++
++## Methodology
++
++PPO attempts to limit the differences between successive policies through ratio clipping. However, Wang et al. (2020) proved the following theorem:
++
++> **Theorem 4.1.** (Wang et al., 2020) For discrete action space tasks where $|\mathcal A| \ge 3$ or continuous action space tasks where the output of the policy $\pi_\theta$ follows a multivariate Gaussian distribution. Let
++>
++> $$
++> \Theta = \{\theta \mid 1-\epsilon \le r_t(\theta) \le 1+\epsilon\},
++> $$
++>
++> we have
++>
++> $$
++> \sup_{\theta\in\Theta}
++> D_{\mathrm{KL}}(\pi_{\theta_{\mathrm{old}}}\parallel\pi_\theta)[s_t]
++> = +\infty
++> $$
++>
++> for both discrete and continuous action space tasks.
++
++Theorem 4.1 demonstrates that $D_{\mathrm{KL}}(\pi_{\theta_{\mathrm{old}}}\parallel\pi_\theta)[s_t]$ is not necessarily bounded even if the probability ratio $r_t(\theta)$ is bounded. However, this theorem considers only an extreme case involving a single data point, which is less typical than the batch processing used in training data. On a broader scale, the heuristic clipping technique employed by PPO aims to bound the TV divergence for sufficient batch sizes (Queeney et al., 2021). This relationship is formalized as
++
++$$
++\mathbb E_{s\sim\rho_\pi(\cdot)}
++\left[D_{\mathrm{TV}}(\pi\parallel\tilde\pi)[s]\right]
++=
++\frac{1}{2}
++\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
++\left[
++\left|\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}-1\right|
++\right].
++\tag{9}
++$$
++
++Then, the performance improvement lower bound (3) can be rewritten as
++
++$$
++\begin{aligned}
++\eta(\tilde\pi)-\eta(\pi)
++\ge{}&
++\frac{1}{1-\gamma}
++\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
++\left[
++\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
++\right]\\
++&-
++\frac{\xi\gamma}{(1-\gamma)^2}
++\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
++\left[
++\left|\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}-1\right|
++\right].
++\end{aligned}
++\tag{10}
++$$
++
++This explains why PPO attempts to limit the probability ratio
++
++$$
++\left|\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}-1\right|\le\epsilon,
++$$
++
++as this enforces a TV divergence trust region in expectation.
++
++Finally, we also found that PPO, which aims to bound the TV divergence, can offer a larger solution space compared to methods that incorporate a looser KL divergence as a constraint (e.g., in TRPO). To illustrate this, we present the following proposition:
++
++> **Proposition 4.2.** Given the old policy $\pi$, define the solution spaces under the TV and KL divergence constraints as follows:
++
++$$
++\begin{aligned}
++\Omega_{\mathrm{TV}}
++&=
++\{\tilde\pi\mid D_{\mathrm{TV}}(\pi\parallel\tilde\pi)[s]\le\delta_{\mathrm{TV}},\ \forall s\in\mathcal S\},\\
++\Omega_{\mathrm{KL}}
++&=
++\{\tilde\pi\mid D_{\mathrm{KL}}(\pi\parallel\tilde\pi)[s]\le\delta_{\mathrm{KL}},\ \forall s\in\mathcal S\},
++\end{aligned}
++\tag{11}
++$$
++
++where $\delta_{\mathrm{KL}}>0$ is a predefined threshold. Let
++
++$$
++\delta_{\mathrm{TV}}\ge\sqrt{\frac{1}{2}\delta_{\mathrm{KL}}},
++$$
++
++we establish that $\Omega_{\mathrm{KL}}\subset\Omega_{\mathrm{TV}}$.
++
++*Proof.* For any given $\delta_{\mathrm{KL}}$ and $\tilde\pi\in\Omega_{\mathrm{KL}}$, using Pinsker's inequality, we have
++
++$$
++D_{\mathrm{TV}}(\pi\parallel\tilde\pi)[s]
++\le
++\sqrt{\frac{1}{2}D_{\mathrm{KL}}(\pi\parallel\tilde\pi)[s]}
++\le
++\sqrt{\frac{1}{2}\delta_{\mathrm{KL}}}
++\le
++\delta_{\mathrm{TV}},
++$$
++
++therefore $\tilde\pi\in\Omega_{\mathrm{KL}}\Longrightarrow\tilde\pi\in\Omega_{\mathrm{TV}}$, which means $\Omega_{\mathrm{KL}}\subset\Omega_{\mathrm{TV}}$, concluding the proof. $\square$
++
++Additionally, the optimal solution to the lower bound in the TV divergence solution space, $\Omega_{\mathrm{TV}}$, is expected to be superior. We now present the following theorem:
++
++> **Theorem 4.3.** Given the old policy $\pi$, and $\Omega_{\mathrm{TV}},\Omega_{\mathrm{KL}}$ presented in Proposition 4.2, let
++
++$$
++\begin{aligned}
++\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi)
++={}&
++\frac{1}{1-\gamma}
++\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
++\left[
++\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
++\right]\\
++&-
++\frac{2\xi\gamma}{(1-\gamma)^2}
++\mathbb E_{s\sim\rho_\pi(\cdot)}
++\left[D_{\mathrm{TV}}(\pi\parallel\tilde\pi)[s]\right],\\[4pt]
++\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi)
++={}&
++\frac{1}{1-\gamma}
++\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
++\left[
++\frac{\tilde\pi(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
++\right]\\
++&-
++\frac{2\xi\gamma}{(1-\gamma)^2}
++\mathbb E_{s\sim\rho_\pi(\cdot)}
++\left[
++\sqrt{\frac{1}{2}D_{\mathrm{KL}}(\pi\parallel\tilde\pi)[s]}
++\right]
++\end{aligned}
++\tag{12}
++$$
++
++be the lower bounds of performance improvement with TV divergence and KL divergence. Let
++
++$$
++\delta_{\mathrm{TV}}\ge\sqrt{\frac{1}{2}\delta_{\mathrm{KL}}},
++$$
++
++denote
++
++$$
++\tilde\pi_{\mathrm{TV}}^*
++=
++\underset{\tilde\pi\in\Omega_{\mathrm{TV}}}{\arg\max}\,
++\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi),
++\qquad
++\tilde\pi_{\mathrm{KL}}^*
++=
++\underset{\tilde\pi\in\Omega_{\mathrm{KL}}}{\arg\max}\,
++\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi),
++\tag{13}
++$$
++
++then
++
++$$
++\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi_{\mathrm{TV}}^*)
++\ge
++\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi_{\mathrm{KL}}^*).
++$$
++
++*Proof.* Since $\Omega_{\mathrm{KL}}\subset\Omega_{\mathrm{TV}}$, we have
++
++$$
++\begin{aligned}
++\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi_{\mathrm{TV}}^*)
++&\ge
++\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi_{\mathrm{KL}}^*)\\
++&=
++\frac{1}{1-\gamma}
++\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
++\left[
++\frac{\tilde\pi_{\mathrm{KL}}^*(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
++\right]\\
++&\quad-
++\frac{2\xi\gamma}{(1-\gamma)^2}
++\mathbb E_{s\sim\rho_\pi(\cdot)}
++\left[D_{\mathrm{TV}}(\pi\parallel\tilde\pi_{\mathrm{KL}}^*)[s]\right]\\
++&\ge
++\frac{1}{1-\gamma}
++\mathbb E_{\substack{s\sim\rho_\pi(\cdot)\\a\sim\pi(\cdot\mid s)}}
++\left[
++\frac{\tilde\pi_{\mathrm{KL}}^*(a\mid s)}{\pi(a\mid s)}\cdot A_\pi(s,a)
++\right]\\
++&\quad-
++\frac{2\xi\gamma}{(1-\gamma)^2}
++\mathbb E_{s\sim\rho_\pi(\cdot)}
++\left[
++\sqrt{\frac{1}{2}D_{\mathrm{KL}}(\pi\parallel\tilde\pi_{\mathrm{KL}}^*)[s]}
++\right]\\
++&=
++\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi_{\mathrm{KL}}^*),
++\end{aligned}
++\tag{14}
++$$
++
++thus $\mathcal L_\pi^{\mathrm{TV}}(\tilde\pi_{\mathrm{TV}}^*)\ge\mathcal L_\pi^{\mathrm{KL}}(\tilde\pi_{\mathrm{KL}}^*)$, concluding the proof. $\square$
++
++> **Conclusion**
++>
++> Optimizing the lower bound with TV divergence constrains offers a more effective solution space than using KL divergence constrains, leading to better policy improvement.
++
++As a result, to optimize the lower bound (10), we aim to solve the following constrained optimization problem:
++
++$$
++\begin{aligned}
++\max_\theta\quad
++&\mathbb E_{(s_t,a_t)\sim\pi_{\theta_{\mathrm{old}}}}
++\left[r_t(\theta)\cdot\hat A_t\right],\\
++\text{s.t.}\quad
++&\mathbb E_{(s_t,a_t)\sim\pi_{\theta_{\mathrm{old}}}}
++\left[|r_t(\theta)-1|\right]\le\epsilon,
++\end{aligned}
++\tag{15}
++$$
++
++where
++
++$$
++r_t(\theta)
++=
++\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)},
++\qquad
++\hat A_t=\hat A(s_t,a_t).
++$$
++
++PPO attempts to satisfy the constraints of (15) through ratio clipping, but this does not prevent excessive ratio deviations (demonstrated in Figure 2). The underlying reason is that ratio clipping causes certain data points to stop contributing to the gradients. Over multiple iterations, this can lead to uncontrollable updates, as the absence of corrective gradients prevents the policy from recovering. To overcome this issue with ratio clipping, we propose the following objective:
++
++$$
++J(\theta)
++=
++\mathbb E_{(s_t,a_t)\sim\pi_{\theta_{\mathrm{old}}}}
++\left\{
++r_t(\theta)\cdot\hat A_t
++-
++\frac{|\hat A_t|}{2\epsilon}\cdot[r_t(\theta)-1]^2
++\right\}.
++\tag{16}
++$$
++
++The details of the objective will be discussed in the following section, and the pseudo-code is shown in Algorithm 1.
++
++### Algorithm 1 - Simple Policy Optimization (SPO)
++
++| Line | Procedure |
++|---:|---|
++| 1 | **Initialize:** Policy and value networks $\pi_\theta,V_\phi$, hyperparameter $\epsilon$, value loss and policy entropy coefficients $c_1,c_2$. |
++| 2 | **Output:** Optimal policy network $\pi_\theta^*$. |
++| 3 | **while** not converged **do** |
++| 4 | &emsp;`# Data collection` |
++| 5 | &emsp;Collect data $\mathcal D=\{(s_t,a_t,r_t)\}_{t=1}^{N}$ using the current policy network $\pi_\theta$. |
++| 6 | &emsp;`# The networks before updating` |
++| 7 | &emsp;$\pi_{\theta_{\mathrm{old}}}\leftarrow\pi_\theta,\quad V_{\phi_{\mathrm{old}}}\leftarrow V_\phi$. |
++| 8 | &emsp;`# Estimate the advantage` $\hat A(s_t,a_t)$ `based on` $V_{\phi_{\mathrm{old}}}$. |
++| 9 | &emsp;Use GAE (Schulman et al., 2015b) technique to estimate the advantage $\hat A(s_t,a_t)$. |
++| 10 | &emsp;`# Estimate the return` $\hat R_t$. |
++| 11 | &emsp;$\hat R_t\leftarrow V_{\phi_{\mathrm{old}}}(s_t)+\hat A(s_t,a_t)$. |
++| 12 | &emsp;**for** each training epoch **do** |
++| 13 | &emsp;&emsp;`# Compute policy loss` $\mathcal L_p$ **(This is the only difference between SPO and PPO)**. |
++| 14 | &emsp;&emsp;$\displaystyle \mathcal L_p\leftarrow-\frac{1}{N}\sum_{t=1}^{N}\left\{\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)}\hat A(s_t,a_t)-\frac{|\hat A(s_t,a_t)|}{2\epsilon}\left[\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)}-1\right]^2\right\}$. |
++| 15 | &emsp;&emsp;`# Compute policy entropy` $\mathcal L_e$ `and value loss` $\mathcal L_v$. |
++| 16 | &emsp;&emsp;$\displaystyle \mathcal L_e\leftarrow\frac{1}{N}\sum_{t=1}^{N}\mathcal H(\pi_\theta(\cdot\mid s_t)),\qquad \mathcal L_v\leftarrow\frac{1}{2N}\sum_{t=1}^{N}[V_\phi(s_t)-\hat R_t]^2$. |
++| 17 | &emsp;&emsp;`# Compute total loss` $\mathcal L$. |
++| 18 | &emsp;&emsp;$\mathcal L\leftarrow\mathcal L_p+c_1\mathcal L_v-c_2\mathcal L_e$. |
++| 19 | &emsp;&emsp;`# Update parameters` $\theta$ `and` $\phi$ `through backpropagation,` $\lambda_\theta$ `and` $\lambda_\phi$ `is the step sizes`. |
++| 20 | &emsp;&emsp;$\theta\leftarrow\theta-\lambda_\theta\nabla_\theta\mathcal L,\qquad\phi\leftarrow\phi-\lambda_\phi\nabla_\phi\mathcal L$. |
++| 21 | &emsp;**end for** |
++| 22 | **end while** |
++
++## Theoretical Results
++
++In this section, we provide some theoretical insights of the differences between PPO and SPO, demonstrating that SPO can be more effective in constraining probability ratios.
++
++### 5.1. Objective Class
++
++Simplify the notation by using $r$ and $A$ to represent the probability ratio and the advantage value. Based on the previous analysis, our goal is to find an objective function $f(r,A,\epsilon)$ such that while optimizing the surrogate objective $rA$, the probability ratio is constrained by $|r-1|\le\epsilon$. According to (15), for any given $A\ne0$ and $\epsilon>0$, we can write down the following desired optimization problem:
++
++$$
++\max_r\ rA,
++\qquad
++\text{s.t.}\quad |r-1|\le\epsilon.
++\tag{17}
++$$
++
++The objective is linear, so the optimal solution is
++
++$$
++r^*=1+\operatorname{sign}(A)\cdot\epsilon,
++$$
++
++where $\operatorname{sign}(\cdot)$ is the sign function. Motivated by this, we present the following definition:
++
++> **Definition 5.1 ($\epsilon$-aligned).** For any given $A\ne0$ and $\epsilon>0$, we say that the function $f(r,A,\epsilon)$ is $\epsilon$-aligned, if it is differentiable and convex with respect to $r$, and attains its maximum value at
++>
++> $$
++> r=1+\operatorname{sign}(A)\cdot\epsilon.
++> $$
++
++The objective of PPO in (6) and SPO in (16) can be expressed as
++
++$$
++\begin{aligned}
++f_{\mathrm{ppo}}
++&=
++\min\left[rA,\operatorname{clip}(r,1-\epsilon,1+\epsilon)A\right],\\
++f_{\mathrm{spo}}
++&=
++rA-\frac{|A|}{2\epsilon}\cdot(r-1)^2.
++\end{aligned}
++\tag{18}
++$$
++
++It can be obtained that $f_{\mathrm{ppo}}$ is not $\epsilon$-aligned, as $f_{\mathrm{ppo}}$ zeros the gradients under some special cases according to (8). For $f_{\mathrm{spo}}$, we have the following theorem:
++
++> **Theorem 5.2.** $f_{\mathrm{spo}}$ is $\epsilon$-aligned.
++
++*Proof.* Obviously, $f_{\mathrm{spo}}$ is differentiable and convex with respect to $r$ since $f_{\mathrm{spo}}$ is a quadratic polynomial of $r$. For any given $A\ne0$ and $\epsilon>0$, let $\partial f_{\mathrm{spo}}(r,A,\epsilon)/\partial r=0$, then
++
++$$
++\frac{\partial f_{\mathrm{spo}}(r,A,\epsilon)}{\partial r}
++=
++A-\frac{|A|}{\epsilon}\cdot(r-1)
++=0,
++\tag{19}
++$$
++
++thus $r=1+\operatorname{sign}(A)\cdot\epsilon$ is the optimal solution for $f_{\mathrm{spo}}$. $\square$
++
++Note that $f_{\mathrm{spo}}$ is not the only objective function that satisfies the definition. It can be proved that there is a simple objective function
++
++$$
++f_{\mathrm{simple}}
++=
++-(r-1-\operatorname{sign}(A)\cdot\epsilon)^2,
++$$
++
++which is also $\epsilon$-aligned. We will discuss the differences between these two in Section 6.3.
++
++### 5.2. Analysis of New Objective
++
++We show that the optimization process of SPO can more effectively bound the probability ratio, as can be seen from Figure 3. The largest circular area in the figure represents the boundary on the probability ratio. The green circles represent data points with non-zero gradients during the training process, while the gray circles represent data points with zero gradients.
++
++![Figure 3. In PPO, certain data points exhibit zero gradients, while in SPO, all data points generate non-zero gradients that guide towards the constraint boundary.](image.png)
++
++During the training process of PPO, certain data points that exceed the probability ratio bound cease to provide gradients. In contrast, all data points in SPO contribute gradients that guide the optimization towards the constraint boundary. As training progresses, PPO will accumulate more gray circles that no longer provide gradients and may be influenced by the harmful gradients from green circles. This phenomenon could potentially push the gray circles further away from the constraint boundary. In contrast, the gradient directions of all data points in SPO point towards the constraint boundary. This indicates that SPO imposes stronger constraints on the probability ratio.
+\ No newline at end of file
+diff --git a/work/code/mjlab-local/mjlab/rl/__init__.py b/work/code/mjlab-local/mjlab/rl/__init__.py
+index 857d820..1b05304 100644
+--- a/work/code/mjlab-local/mjlab/rl/__init__.py
++++ b/work/code/mjlab-local/mjlab/rl/__init__.py
+@@ -5,5 +5,9 @@ from mjlab.rl.config import RslRlPpoAlgorithmCfg as RslRlPpoAlgorithmCfg
+ from mjlab.rl.config import RslRlReppoAlgorithmCfg as RslRlReppoAlgorithmCfg
+ from mjlab.rl.config import RslRlReppoCriticCfg as RslRlReppoCriticCfg
+ from mjlab.rl.config import RslRlReppoRunnerCfg as RslRlReppoRunnerCfg
++from mjlab.rl.config import RslRlSacActorCfg as RslRlSacActorCfg
++from mjlab.rl.config import RslRlSacAlgorithmCfg as RslRlSacAlgorithmCfg
++from mjlab.rl.config import RslRlSacCriticCfg as RslRlSacCriticCfg
++from mjlab.rl.config import RslRlSacRunnerCfg as RslRlSacRunnerCfg
+ from mjlab.rl.runner import MjlabOnPolicyRunner as MjlabOnPolicyRunner
+ from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper as RslRlVecEnvWrapper
+diff --git a/work/code/mjlab-local/mjlab/rl/config.py b/work/code/mjlab-local/mjlab/rl/config.py
+index 6aa9036..45ba550 100644
+--- a/work/code/mjlab-local/mjlab/rl/config.py
++++ b/work/code/mjlab-local/mjlab/rl/config.py
+@@ -145,6 +145,94 @@ class RslRlReppoAlgorithmCfg:
+   """Algorithm class name resolved by RSL-RL."""
+ 
+ 
++@dataclass
++class RslRlSacActorCfg:
++  """Configuration for SAC's bounded tanh-Gaussian actor."""
++
++  hidden_dims: Tuple[int, ...] = (256, 256, 256)
++  """Hidden dimensions of the actor network."""
++  activation: str = "elu"
++  """Hidden-layer activation."""
++  obs_normalization: bool = False
++  """Whether to normalize actor observations."""
++  init_noise_std: float = 1.0
++  """Initial standard deviation of the action distribution."""
++  layer_norm: bool = False
++  """Whether to apply layer normalization in the actor network."""
++  log_std_min: float = -20.0
++  """Minimum log standard deviation."""
++  log_std_max: float = 2.0
++  """Maximum log standard deviation."""
++  action_low: float = -1.0
++  """Lower bound of the normalized action space."""
++  action_high: float = 1.0
++  """Upper bound of the normalized action space."""
++  class_name: str = "SACActorModel"
++  """Actor class name resolved by RSL-RL."""
++
++
++@dataclass
++class RslRlSacCriticCfg:
++  """Configuration for SAC's twin action-value critic."""
++
++  hidden_dims: Tuple[int, ...] = (256, 256, 256)
++  """Hidden dimensions shared by both Q networks."""
++  activation: str = "elu"
++  """Hidden-layer activation."""
++  obs_normalization: bool = False
++  """Whether to normalize critic observations."""
++  layer_norm: bool = False
++  """Whether to apply layer normalization in the Q networks."""
++  class_name: str = "SACCriticModel"
++  """Critic class name resolved by RSL-RL."""
++
++
++@dataclass
++class RslRlSacAlgorithmCfg:
++  """Configuration for Soft Actor-Critic."""
++
++  replay_buffer_size: int = 1_000_000
++  """Total replay capacity across all vectorized environments."""
++  num_learning_epochs: int = 1
++  """Number of passes through the requested replay updates."""
++  num_mini_batches: int = 1
++  """Number of replay mini-batches sampled per epoch."""
++  mini_batch_size: int = 256
++  """Number of replay transitions in each mini-batch."""
++  actor_learning_rate: float = 3e-4
++  """Actor optimizer learning rate."""
++  critic_learning_rate: float = 3e-4
++  """Critic optimizer learning rate."""
++  alpha_learning_rate: float = 3e-4
++  """Entropy-temperature optimizer learning rate."""
++  actor_optimizer: Literal["adam", "adamw", "sgd", "rmsprop"] = "adam"
++  """Actor optimizer type."""
++  critic_optimizer: Literal["adam", "adamw", "sgd", "rmsprop"] = "adam"
++  """Critic optimizer type."""
++  auto_alpha: bool = True
++  """Whether to learn the entropy temperature automatically."""
++  alpha: float = 0.05
++  """Initial entropy temperature."""
++  tau: float = 0.005
++  """Polyak target-network update coefficient."""
++  gamma: float = 0.99
++  """Discount factor."""
++  target_entropy_scale: float = 1.0
++  """Multiplier applied to the default target entropy."""
++  max_grad_norm: float = 1.0
++  """Maximum actor and critic gradient norm."""
++  policy_frequency: int = 2
++  """Number of critic updates between actor updates."""
++  n_steps: int = 3
++  """Number of replay steps used to construct return targets."""
++  rnd_cfg: dict[str, Any] | None = None
++  """Optional random-network-distillation configuration."""
++  symmetry_cfg: dict[str, Any] | None = None
++  """Optional symmetry augmentation configuration."""
++  class_name: str = "SAC"
++  """Algorithm class name resolved by RSL-RL."""
++
++
+ @dataclass
+ class RslRlBaseRunnerCfg:
+   seed: int = 42
+@@ -234,3 +322,19 @@ class RslRlReppoRunnerCfg(RslRlBaseRunnerCfg):
+   """Action-conditioned categorical critic configuration."""
+   algorithm: RslRlReppoAlgorithmCfg = field(default_factory=RslRlReppoAlgorithmCfg)
+   """REPPO algorithm configuration."""
++
++
++@dataclass
++class RslRlSacRunnerCfg(RslRlBaseRunnerCfg):
++  """Runner configuration for replay-based SAC training."""
++
++  class_name: str = "OnPolicyRunner"
++  """Mjlab uses its OnPolicyRunner adapter, which detects replay algorithms."""
++  actor: RslRlSacActorCfg = field(default_factory=RslRlSacActorCfg)
++  """Bounded stochastic actor configuration."""
++  critic: RslRlSacCriticCfg = field(default_factory=RslRlSacCriticCfg)
++  """Twin action-value critic configuration."""
++  algorithm: RslRlSacAlgorithmCfg = field(default_factory=RslRlSacAlgorithmCfg)
++  """SAC algorithm and replay configuration."""
++  start_training: int = 0
++  """Iteration at which replay updates may begin."""
+diff --git a/work/code/mjlab-local/mjlab/tasks/cartpole/__init__.py b/work/code/mjlab-local/mjlab/tasks/cartpole/__init__.py
+index f26d1a6..ed88f33 100644
+--- a/work/code/mjlab-local/mjlab/tasks/cartpole/__init__.py
++++ b/work/code/mjlab-local/mjlab/tasks/cartpole/__init__.py
+@@ -2,6 +2,7 @@ from mjlab.tasks.cartpole.cartpole_env_cfg import (
+   cartpole_balance_env_cfg,
+   cartpole_ppo_runner_cfg,
+   cartpole_reppo_runner_cfg,
++  cartpole_sac_runner_cfg,
+   cartpole_swingup_env_cfg,
+ )
+ from mjlab.tasks.registry import register_mjlab_task
+@@ -33,3 +34,10 @@ register_mjlab_task(
+   play_env_cfg=cartpole_swingup_env_cfg(play=True),
+   rl_cfg=cartpole_reppo_runner_cfg(),
+ )
++
++register_mjlab_task(
++  task_id="Mjlab-Cartpole-Swingup-SAC",
++  env_cfg=cartpole_swingup_env_cfg(),
++  play_env_cfg=cartpole_swingup_env_cfg(play=True),
++  rl_cfg=cartpole_sac_runner_cfg(),
++)
+diff --git a/work/code/mjlab-local/mjlab/tasks/cartpole/cartpole_env_cfg.py b/work/code/mjlab-local/mjlab/tasks/cartpole/cartpole_env_cfg.py
+index d933db4..f97d93f 100644
+--- a/work/code/mjlab-local/mjlab/tasks/cartpole/cartpole_env_cfg.py
++++ b/work/code/mjlab-local/mjlab/tasks/cartpole/cartpole_env_cfg.py
+@@ -35,6 +35,10 @@ from mjlab.rl import (
+   RslRlReppoAlgorithmCfg,
+   RslRlReppoCriticCfg,
+   RslRlReppoRunnerCfg,
++  RslRlSacActorCfg,
++  RslRlSacAlgorithmCfg,
++  RslRlSacCriticCfg,
++  RslRlSacRunnerCfg,
+ )
+ from mjlab.scene import SceneCfg
+ from mjlab.sim import MujocoCfg, SimulationCfg
+@@ -356,3 +360,42 @@ def cartpole_reppo_runner_cfg() -> RslRlReppoRunnerCfg:
+     num_steps_per_env=128,
+     max_iterations=250,
+   )
++
++
++def cartpole_sac_runner_cfg() -> RslRlSacRunnerCfg:
++  """Create a SAC runner configuration for Cartpole Swingup."""
++  return RslRlSacRunnerCfg(
++    actor=RslRlSacActorCfg(
++      hidden_dims=(256, 256),
++      activation="elu",
++      obs_normalization=False,
++      action_low=-1.0,
++      action_high=1.0,
++    ),
++    critic=RslRlSacCriticCfg(
++      hidden_dims=(256, 256),
++      activation="elu",
++      obs_normalization=False,
++    ),
++    algorithm=RslRlSacAlgorithmCfg(
++      replay_buffer_size=1_000_000,
++      num_learning_epochs=1,
++      num_mini_batches=16,
++      mini_batch_size=256,
++      actor_learning_rate=3e-4,
++      critic_learning_rate=3e-4,
++      alpha_learning_rate=3e-4,
++      auto_alpha=True,
++      alpha=0.05,
++      tau=0.005,
++      gamma=0.99,
++      target_entropy_scale=1.0,
++      max_grad_norm=1.0,
++      policy_frequency=2,
++      n_steps=3,
++    ),
++    experiment_name="cartpole_sac",
++    save_interval=500,
++    num_steps_per_env=1,
++    max_iterations=10_000,
++  )
+diff --git a/work/code/rsl_rl-local/docs/index.rst b/work/code/rsl_rl-local/docs/index.rst
+index 9d0bbb2..f35f694 100644
+--- a/work/code/rsl_rl-local/docs/index.rst
++++ b/work/code/rsl_rl-local/docs/index.rst
+@@ -9,6 +9,7 @@ RSL-RL Documentation
+    guide/overview
+    guide/installation
+    guide/configuration
++   guide/sac
+    guide/contribution
+ 
+ .. toctree::
+@@ -69,4 +70,3 @@ If you use RSL-RL in your research, please cite the `paper <https://arxiv.org/ab
+      journal={arXiv preprint arXiv:2509.10771},
+      year={2025}
+    }
+-
+diff --git a/work/code/rsl_rl-local/rsl_rl/algorithms/__init__.py b/work/code/rsl_rl-local/rsl_rl/algorithms/__init__.py
+index 128da9a..153f07f 100644
+--- a/work/code/rsl_rl-local/rsl_rl/algorithms/__init__.py
++++ b/work/code/rsl_rl-local/rsl_rl/algorithms/__init__.py
+@@ -8,6 +8,7 @@
+ from .distillation import Distillation
+ from .ppo import PPO
+ from .reppo import REPPO
++from .sac import SAC
+ from .spo import SPO
+ 
+-__all__ = ["PPO", "REPPO", "SPO", "Distillation"]
++__all__ = ["PPO", "REPPO", "SAC", "SPO", "Distillation"]
+diff --git a/work/code/rsl_rl-local/rsl_rl/algorithms/ppo.py b/work/code/rsl_rl-local/rsl_rl/algorithms/ppo.py
+index f73598c..f6117bb 100644
+--- a/work/code/rsl_rl-local/rsl_rl/algorithms/ppo.py
++++ b/work/code/rsl_rl-local/rsl_rl/algorithms/ppo.py
+@@ -17,6 +17,13 @@ from rsl_rl.models import MLPModel
+ from rsl_rl.storage import RolloutStorage
+ from rsl_rl.utils import compile_model, resolve_callable, resolve_obs_groups, resolve_optimizer
+ 
++from .transition_handling import (
++    compute_gae_returns,
++    configure_timeout_transition,
++    masked_mean,
++    normalize_valid,
++)
++
+ 
+ class PPO:
+     """Proximal Policy Optimization algorithm.
+@@ -136,7 +143,6 @@ class PPO:
+             self.rnd.update_normalization(obs)
+ 
+         # Record the rewards and dones
+-        # Note: We clone here because later on we bootstrap the rewards based on timeouts
+         self.transition.rewards = rewards.clone()
+         self.transition.dones = dones
+ 
+@@ -147,12 +153,18 @@ class PPO:
+             # Add intrinsic rewards to extrinsic rewards
+             self.transition.rewards += self.intrinsic_rewards
+ 
+-        # Bootstrapping on time outs
+-        if "time_outs" in extras:
+-            self.transition.rewards += self.gamma * torch.squeeze(
+-                self.transition.values * extras["time_outs"].unsqueeze(1).to(self.device),  # type: ignore
+-                1,
+-            )
++        # Configure timeout boundaries. If the final observation is unavailable,
++        # discard only the timeout-causing transition and bootstrap the preceding
++        # valid transition from its known next state.
++        configure_timeout_transition(
++            self.storage,
++            self.transition,
++            obs,
++            dones,
++            extras,
++            self._evaluate_bootstrap_values,
++            self.device,
++        )
+ 
+         # Record the transition
+         self.storage.add_transition(self.transition)
+@@ -168,24 +180,17 @@ class PPO:
+         last_values = self.critic(obs).detach()
+         # Restore the critic's hidden state so the next rollout is not affected by the forward pass
+         self.critic.reset(hidden_state=critic_hidden_state)
+-        # Compute returns and advantages
+-        advantage = 0
+-        for step in reversed(range(st.num_transitions_per_env)):
+-            # If we are at the last step, bootstrap the return value
+-            next_values = last_values if step == st.num_transitions_per_env - 1 else st.values[step + 1]
+-            # 1 if we are not in a terminal state, 0 otherwise
+-            next_is_not_terminal = 1.0 - st.dones[step].float()
+-            # TD error: r_t + gamma * V(s_{t+1}) - V(s_t)
+-            delta = st.rewards[step] + next_is_not_terminal * self.gamma * next_values - st.values[step]
+-            # Advantage: A(s_t, a_t) = delta_t + gamma * lambda * A(s_{t+1}, a_{t+1})
+-            advantage = delta + next_is_not_terminal * self.gamma * self.lam * advantage
+-            # Return: R_t = A(s_t, a_t) + V(s_t)
+-            st.returns[step] = advantage + st.values[step]
+-        # Compute the advantages
+-        st.advantages = st.returns - st.values
++        compute_gae_returns(st, last_values, self.gamma, self.lam)
+         # Normalize the advantages if per minibatch normalization is not used
+         if not self.normalize_advantage_per_mini_batch:
+-            st.advantages = (st.advantages - st.advantages.mean()) / (st.advantages.std() + 1e-8)
++            st.normalize_advantages()
++
++    def _evaluate_bootstrap_values(self, obs: TensorDict) -> torch.Tensor:
++        """Evaluate final observations without advancing recurrent rollout state."""
++        hidden_state = self.critic.get_hidden_state()
++        values = self.critic(obs).detach()
++        self.critic.reset(hidden_state=hidden_state)
++        return values
+ 
+     def update(self) -> dict[str, float]:
+         """Run optimization epochs over stored batches and return mean losses."""
+@@ -206,11 +211,12 @@ class PPO:
+         # Iterate over mini-batches
+         for batch in generator:
+             original_batch_size = batch.observations.batch_size[0]
++            loss_valid = batch.valid if batch.masks is not None else None
+ 
+             # Check if we should normalize advantages per mini-batch
+             if self.normalize_advantage_per_mini_batch:
+                 with torch.no_grad():
+-                    batch.advantages = (batch.advantages - batch.advantages.mean()) / (batch.advantages.std() + 1e-8)  # type: ignore
++                    batch.advantages = normalize_valid(batch.advantages, loss_valid)  # type: ignore[arg-type]
+ 
+             # Perform symmetric augmentation if enabled
+             if self.symmetry:
+@@ -234,7 +240,7 @@ class PPO:
+             if self.desired_kl is not None and self.schedule == "adaptive":
+                 with torch.inference_mode():
+                     kl = self.actor.get_kl_divergence(batch.old_distribution_params, distribution_params)  # type: ignore
+-                    kl_mean = torch.mean(kl)
++                    kl_mean = masked_mean(kl, loss_valid)
+ 
+                     # Reduce the KL divergence across all GPUs
+                     if self.is_multi_gpu:
+@@ -264,18 +270,19 @@ class PPO:
+             surrogate_clipped = -torch.squeeze(batch.advantages) * torch.clamp(  # type: ignore
+                 ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
+             )
+-            surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
++            surrogate_loss = masked_mean(torch.max(surrogate, surrogate_clipped), loss_valid)
+ 
+             # Value function loss
+             if self.use_clipped_value_loss:
+                 value_clipped = batch.values + (values - batch.values).clamp(-self.clip_param, self.clip_param)
+                 value_losses = (values - batch.returns).pow(2)
+                 value_losses_clipped = (value_clipped - batch.returns).pow(2)
+-                value_loss = torch.max(value_losses, value_losses_clipped).mean()
++                value_loss = masked_mean(torch.max(value_losses, value_losses_clipped), loss_valid)
+             else:
+-                value_loss = (batch.returns - values).pow(2).mean()
++                value_loss = masked_mean((batch.returns - values).pow(2), loss_valid)
+ 
+-            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
++            entropy_mean = masked_mean(entropy, loss_valid)
++            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_mean
+ 
+             # RND loss
+             rnd_loss = self.rnd.compute_loss(batch.observations[:original_batch_size]) if self.rnd else None  # type: ignore
+@@ -309,7 +316,7 @@ class PPO:
+             # Store the losses
+             mean_value_loss += value_loss.item()
+             mean_surrogate_loss += surrogate_loss.item()
+-            mean_entropy += entropy.mean().item()
++            mean_entropy += entropy_mean.item()
+             # RND loss
+             if mean_rnd_loss is not None:
+                 mean_rnd_loss += rnd_loss.item()
+diff --git a/work/code/rsl_rl-local/rsl_rl/algorithms/reppo.py b/work/code/rsl_rl-local/rsl_rl/algorithms/reppo.py
+index 01630bb..2285809 100644
+--- a/work/code/rsl_rl-local/rsl_rl/algorithms/reppo.py
++++ b/work/code/rsl_rl-local/rsl_rl/algorithms/reppo.py
+@@ -4,18 +4,22 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ 
+ from __future__ import annotations
++
+ import copy
+-from collections.abc import Iterable
+-from itertools import chain
+ import torch
+ import torch.nn as nn
++from collections.abc import Iterable
++from itertools import chain
+ from tensordict import TensorDict
++
+ from rsl_rl.env import VecEnv
+ from rsl_rl.models import ActionValueModel, MLPModel
+ from rsl_rl.modules import Distribution
+ from rsl_rl.storage import RolloutStorage
+ from rsl_rl.utils import compile_model, resolve_callable, resolve_obs_groups, resolve_optimizer
+ 
++from .transition_handling import compute_td_lambda_returns, configure_timeout_transition
++
+ 
+ class REPPO:
+     """Relative Entropy Pathwise Policy Optimization.
+@@ -76,7 +80,9 @@ class REPPO:
+             raise ValueError("max_grad_norm must be positive.")
+         rollout_size = storage.num_envs * storage.num_transitions_per_env
+         if rollout_size % num_mini_batches != 0:
+-            raise ValueError(f"Rollout size ({rollout_size}) must be divisible by num_mini_batches ({num_mini_batches}).")
++            raise ValueError(
++                f"Rollout size ({rollout_size}) must be divisible by num_mini_batches ({num_mini_batches})."
++            )
+         self.device = device
+         self.is_multi_gpu = multi_gpu_cfg is not None
+         if multi_gpu_cfg is None:
+@@ -135,20 +141,31 @@ class REPPO:
+         self.transition.actions = actions.detach()
+         self.transition.values = self.critic(obs, self.transition.actions).detach()
+         self.transition.actions_log_prob = self._raw_actor.get_output_log_prob(self.transition.actions).detach()
+-        self.transition.distribution_params = tuple((parameter.detach() for parameter in self._raw_actor.output_distribution_params))
++        self.transition.distribution_params = tuple(
++            parameter.detach() for parameter in self._raw_actor.output_distribution_params
++        )
+         self.transition.observations = obs
+         return self.transition.actions
+ 
+-    def process_env_step(self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]) -> None:
++    def process_env_step(
++        self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]
++    ) -> None:
+         """Store a rollout step with the maximum-entropy reward correction."""
+         self.actor.update_normalization(obs)
+         self.critic.update_normalization(obs)
+-        time_outs = extras.get("time_outs", torch.zeros_like(dones, dtype=torch.bool)).to(self.device).bool()
+         self.transition.dones = dones.bool()
+         augmented_rewards = rewards.clone()
+-        augmented_rewards += self.gamma * self.transition.values.squeeze(-1) * time_outs.float()
+         augmented_rewards -= self.gamma * self.alpha_temp.detach() * self.transition.actions_log_prob
+         self.transition.rewards = augmented_rewards
++        configure_timeout_transition(
++            self.storage,
++            self.transition,
++            obs,
++            dones,
++            extras,
++            self._evaluate_bootstrap_values,
++            self.device,
++        )
+         self.storage.add_transition(self.transition)
+         self.transition.clear()
+         self.actor.reset(dones)
+@@ -158,14 +175,12 @@ class REPPO:
+         """Compute generalized on-policy Q targets with a backward TD-lambda pass."""
+         last_actions = self.actor(obs, stochastic_output=True).detach()
+         last_values = self.critic(obs, last_actions).detach()
+-        recursive_value = last_values
+-        for step in reversed(range(self.storage.num_transitions_per_env)):
+-            next_values = last_values if step == self.storage.num_transitions_per_env - 1 else self.storage.values[step + 1]
+-            next_is_not_terminal = 1.0 - self.storage.dones[step].float()
+-            one_step_bootstrap = next_is_not_terminal * self.gamma * next_values
+-            multi_step_bootstrap = next_is_not_terminal * self.gamma * recursive_value
+-            recursive_value = self.storage.rewards[step] + (1.0 - self.lam) * one_step_bootstrap + self.lam * multi_step_bootstrap
+-            self.storage.returns[step] = recursive_value
++        compute_td_lambda_returns(self.storage, last_values, self.gamma, self.lam)
++
++    def _evaluate_bootstrap_values(self, obs: TensorDict) -> torch.Tensor:
++        """Estimate the soft action value at supplied final observations."""
++        actions = self.actor(obs, stochastic_output=True).detach()
++        return self.critic(obs, actions).detach()
+ 
+     def update(self) -> dict[str, float]:
+         """Fit the categorical critic first, then optimize the constrained actor."""
+@@ -201,7 +216,9 @@ class REPPO:
+         critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+         self.critic_optimizer.step()
+         prediction_error = (values.detach() - batch.returns).abs().mean()
+-        target_saturation = ((batch.returns <= self._raw_critic.vmin) | (batch.returns >= self._raw_critic.vmax)).float().mean()
++        target_saturation = (
++            ((batch.returns <= self._raw_critic.vmin) | (batch.returns >= self._raw_critic.vmax)).float().mean()
++        )
+         return {
+             "value": value_loss.detach().item(),
+             "value_prediction_error": prediction_error.item(),
+@@ -228,7 +245,9 @@ class REPPO:
+                 old_log_prob = old_distribution.log_prob(old_actions)
+             new_log_prob = distribution.log_prob(old_actions)
+             kl = (old_log_prob - new_log_prob).mean(dim=0)
+-            constrained_actor_loss = torch.where((kl < self.desired_kl).detach(), primary_actor_loss, self.alpha_kl.detach() * kl).mean()
++            constrained_actor_loss = torch.where(
++                (kl < self.desired_kl).detach(), primary_actor_loss, self.alpha_kl.detach() * kl
++            ).mean()
+             temperature_loss = self.alpha_temp * (entropy.mean() - self.target_entropy).detach()
+             kl_multiplier_loss = self.alpha_kl * (self.desired_kl - kl.mean()).detach()
+             actor_loss = constrained_actor_loss + temperature_loss + kl_multiplier_loss
+@@ -340,4 +359,4 @@ class REPPO:
+                 continue
+             numel = parameter.numel()
+             parameter.grad.data.copy_(flattened_gradients[offset : offset + numel].view_as(parameter.grad))
+-            offset += numel
+\ No newline at end of file
++            offset += numel
+diff --git a/work/code/rsl_rl-local/rsl_rl/algorithms/sac.py b/work/code/rsl_rl-local/rsl_rl/algorithms/sac.py
+index e69de29..fcbd2d3 100644
+--- a/work/code/rsl_rl-local/rsl_rl/algorithms/sac.py
++++ b/work/code/rsl_rl-local/rsl_rl/algorithms/sac.py
+@@ -0,0 +1,452 @@
++# Copyright (c) 2021-2026, ETH Zurich and NVIDIA CORPORATION
++# All rights reserved.
++#
++# SPDX-License-Identifier: BSD-3-Clause
++
++"""Soft Actor-Critic for the RSL-RL 5.x model API."""
++
++from __future__ import annotations
++
++import torch
++import torch.nn as nn
++from collections.abc import Iterable
++from tensordict import TensorDict
++
++from rsl_rl.env import VecEnv
++from rsl_rl.extensions import RandomNetworkDistillation, Symmetry, resolve_rnd_config, resolve_symmetry_config
++from rsl_rl.models import SACActorModel, SACCriticModel
++from rsl_rl.storage import ReplayBuffer
++from rsl_rl.utils import resolve_callable, resolve_obs_groups, resolve_optimizer
++
++
++class SAC:
++    """Entropy-regularized off-policy actor-critic with twin target Q networks."""
++
++    actor: SACActorModel
++    critic: SACCriticModel
++
++    def __init__(
++        self,
++        actor: SACActorModel,
++        critic: SACCriticModel,
++        replay_buffer: ReplayBuffer,
++        replay_buffer_size: int = 1_000_000,
++        num_learning_epochs: int = 1,
++        num_mini_batches: int = 1,
++        mini_batch_size: int = 256,
++        actor_learning_rate: float = 1e-3,
++        critic_learning_rate: float = 1e-3,
++        alpha_learning_rate: float = 1e-3,
++        actor_optimizer: str = "adam",
++        critic_optimizer: str = "adam",
++        auto_alpha: bool = True,
++        alpha: float = 0.05,
++        tau: float = 0.005,
++        gamma: float = 0.998,
++        target_entropy_scale: float = 1.0,
++        max_grad_norm: float = 1.0,
++        policy_frequency: int = 2,
++        n_steps: int = 1,
++        device: str = "cpu",
++        rnd_cfg: dict | None = None,
++        symmetry_cfg: dict | None = None,
++        multi_gpu_cfg: dict | None = None,
++    ) -> None:
++        """Initialize SAC models, replay storage, optimizers, and extensions."""
++        del replay_buffer_size, n_steps
++        if actor.is_recurrent or critic.is_recurrent:
++            raise NotImplementedError("SAC currently supports feedforward actor and critic models only.")
++        if num_learning_epochs < 1 or num_mini_batches < 1 or mini_batch_size < 1:
++            raise ValueError("SAC update counts and mini_batch_size must be positive.")
++        if policy_frequency < 1:
++            raise ValueError("policy_frequency must be positive.")
++        if alpha <= 0.0:
++            raise ValueError("alpha must be positive.")
++        if not 0.0 <= gamma <= 1.0 or not 0.0 < tau <= 1.0:
++            raise ValueError("gamma must lie in [0, 1] and tau in (0, 1].")
++
++        self.device = device
++        self.is_multi_gpu = multi_gpu_cfg is not None
++        self.gpu_global_rank = 0 if multi_gpu_cfg is None else multi_gpu_cfg["global_rank"]
++        self.gpu_world_size = 1 if multi_gpu_cfg is None else multi_gpu_cfg["world_size"]
++
++        self.rnd = RandomNetworkDistillation(device=device, **rnd_cfg) if rnd_cfg else None
++        self.symmetry = Symmetry(**symmetry_cfg) if symmetry_cfg else None
++
++        self.actor = actor.to(device)
++        self.critic = critic.to(device)
++        self.replay_buffer = replay_buffer
++        self.transition = ReplayBuffer.Transition()
++        self.intrinsic_rewards: torch.Tensor | None = None
++
++        self.num_learning_epochs = num_learning_epochs
++        self.num_mini_batches = num_mini_batches
++        self.mini_batch_size = mini_batch_size
++        self.actor_learning_rate = actor_learning_rate
++        self.critic_learning_rate = critic_learning_rate
++        self.alpha_learning_rate = alpha_learning_rate
++        self.gamma = gamma
++        self.tau = tau
++        self.max_grad_norm = max_grad_norm
++        self.policy_frequency = policy_frequency
++        self.update_step = 0
++        self.auto_alpha = auto_alpha
++        self.target_entropy = -target_entropy_scale * actor.output_dim
++
++        self.log_alpha = nn.Parameter(
++            torch.tensor(alpha, device=device).log(),
++            requires_grad=auto_alpha,
++        )
++        self.actor_parameters = [parameter for parameter in self.actor.parameters() if parameter.requires_grad]
++        self.critic_parameters = [parameter for parameter in self.critic.parameters() if parameter.requires_grad]
++        self.actor_optimizer = resolve_optimizer(actor_optimizer)(self.actor_parameters, lr=actor_learning_rate)
++        self.critic_optimizer = resolve_optimizer(critic_optimizer)(self.critic_parameters, lr=critic_learning_rate)
++        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_learning_rate) if auto_alpha else None
++        self.critic.init_target_networks()
++
++    @property
++    def alpha(self) -> float:
++        """Current entropy-temperature value."""
++        return self.log_alpha.detach().exp().item()
++
++    def act(self, obs: TensorDict) -> torch.Tensor:
++        """Sample an exploration action and stage its state in the transition."""
++        with torch.no_grad():
++            actions = self.actor(obs, stochastic_output=True)
++        self.transition.observations = obs
++        self.transition.actions = actions
++        return actions
++
++    def process_env_step(
++        self,
++        next_obs: TensorDict,
++        rewards: torch.Tensor,
++        dones: torch.Tensor,
++        extras: dict,
++    ) -> None:
++        """Store a step while separating terminal, timeout, and invalid-reset cases."""
++        timeouts = extras.get("time_outs", torch.zeros_like(dones, dtype=torch.bool))
++        timeouts = timeouts.to(self.device).view(-1).bool() & dones.to(self.device).view(-1).bool()
++        true_next_obs = next_obs
++        bootstrap = torch.zeros_like(timeouts)
++        valid = torch.ones_like(timeouts)
++
++        final_obs = extras.get("time_outs_obs", extras.get("final_observation"))
++        if timeouts.any() and final_obs is not None:
++            try:
++                final_obs = self._as_tensordict(final_obs, next_obs).to(self.device)
++                true_next_obs = next_obs.clone()
++                for key in true_next_obs:
++                    true_next_obs[key][timeouts] = final_obs[key][timeouts]
++                bootstrap = timeouts
++            except (KeyError, TypeError, ValueError):
++                final_obs = None
++                true_next_obs = next_obs
++
++        if timeouts.any() and final_obs is None:
++            # The returned observation belongs to the reset episode. This tuple has
++            # no trustworthy s_{t+1}, so retain it only as a chronological boundary.
++            valid = ~timeouts
++
++        self.actor.update_normalization(true_next_obs)
++        self.critic.update_normalization(true_next_obs)
++        if self.rnd:
++            self.rnd.update_normalization(true_next_obs)
++            self.intrinsic_rewards = self.rnd.get_intrinsic_reward(true_next_obs)
++            rewards = rewards + self.intrinsic_rewards
++        else:
++            self.intrinsic_rewards = None
++
++        self.transition.rewards = rewards
++        self.transition.next_observations = true_next_obs
++        self.transition.dones = dones
++        self.transition.bootstrap = bootstrap
++        self.transition.valid = valid
++        self.replay_buffer.add_transition(self.transition)
++        self.transition.clear()
++        self.actor.reset(dones)
++
++    def update(self) -> dict[str, float]:
++        """Run replay updates and return averaged diagnostics."""
++        totals = {"critic1": 0.0, "critic2": 0.0, "actor": 0.0, "alpha": 0.0}
++        if self.rnd:
++            totals["rnd"] = 0.0
++        if self.symmetry:
++            totals["symmetry"] = 0.0
++        actor_updates = 0
++        num_updates = 0
++
++        generator = self.replay_buffer.mini_batch_generator(
++            self.num_mini_batches,
++            self.mini_batch_size,
++            self.num_learning_epochs,
++        )
++        for batch in generator:
++            obs = batch.observations
++            actions = batch.actions
++            rewards = batch.rewards
++            next_obs = batch.next_observations
++            bootstrap_mask = batch.bootstrap_mask
++            effective_n_steps = batch.effective_n_steps
++            original_batch_size = obs.batch_size[0]
++
++            if self.symmetry and self.symmetry.use_data_augmentation:
++                obs, actions = self.symmetry.data_augmentation_func(
++                    env=self.symmetry.env,
++                    obs=obs,
++                    actions=actions,
++                )
++                next_obs, _ = self.symmetry.data_augmentation_func(
++                    env=self.symmetry.env,
++                    obs=next_obs,
++                    actions=None,
++                )
++                num_aug = int(obs.batch_size[0] / original_batch_size)
++                rewards = self._repeat_batch(rewards, num_aug)
++                bootstrap_mask = self._repeat_batch(bootstrap_mask, num_aug)
++                effective_n_steps = self._repeat_batch(effective_n_steps, num_aug)
++
++            with torch.no_grad():
++                next_actions, next_log_prob = self.actor.sample_action_logp(next_obs)
++                target_q1, target_q2 = self.critic.evaluate_all_target_q(next_obs, next_actions)
++                soft_target = torch.minimum(target_q1, target_q2) - self.log_alpha.exp() * next_log_prob
++                discount = torch.pow(
++                    torch.as_tensor(self.gamma, device=self.device),
++                    effective_n_steps.to(dtype=soft_target.dtype),
++                )
++                target_q = rewards + discount * bootstrap_mask * soft_target
++
++            q1, q2 = self.critic.evaluate_all_q(obs, actions)
++            critic1_loss = nn.functional.mse_loss(q1, target_q)
++            critic2_loss = nn.functional.mse_loss(q2, target_q)
++            critic_loss = 0.5 * (critic1_loss + critic2_loss)
++            self.critic_optimizer.zero_grad(set_to_none=True)
++            critic_loss.backward()
++            if self.is_multi_gpu:
++                self._reduce_gradients(self.critic_parameters)
++            nn.utils.clip_grad_norm_(self.critic_parameters, self.max_grad_norm)
++            self.critic_optimizer.step()
++
++            new_actions, log_prob = self.actor.sample_action_logp(obs)
++            if self.auto_alpha:
++                alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
++                self.alpha_optimizer.zero_grad(set_to_none=True)  # type: ignore[union-attr]
++                alpha_loss.backward()
++                if self.is_multi_gpu:
++                    self._reduce_gradients([self.log_alpha])
++                self.alpha_optimizer.step()  # type: ignore[union-attr]
++            else:
++                alpha_loss = torch.zeros((), device=self.device)
++
++            symmetry_loss = torch.zeros((), device=self.device)
++            actor_loss = torch.zeros((), device=self.device)
++            if self.update_step % self.policy_frequency == 0:
++                for parameter in self.critic_parameters:
++                    parameter.requires_grad_(False)
++                try:
++                    q1_new, q2_new = self.critic.evaluate_all_q(obs, new_actions)
++                    actor_loss = (self.log_alpha.detach().exp() * log_prob - torch.minimum(q1_new, q2_new)).mean()
++                    if self.symmetry:
++                        symmetry_loss = self._compute_symmetry_loss(obs, original_batch_size)
++                        if self.symmetry.use_mirror_loss:
++                            actor_loss = actor_loss + self.symmetry.mirror_loss_coeff * symmetry_loss
++                    self.actor_optimizer.zero_grad(set_to_none=True)
++                    actor_loss.backward()
++                    if self.is_multi_gpu:
++                        self._reduce_gradients(self.actor_parameters)
++                    nn.utils.clip_grad_norm_(self.actor_parameters, self.max_grad_norm)
++                    self.actor_optimizer.step()
++                finally:
++                    for parameter in self.critic_parameters:
++                        parameter.requires_grad_(True)
++                actor_updates += 1
++
++            self.critic.soft_update_target_networks(self.tau)
++
++            if self.rnd:
++                rnd_loss = self.rnd.compute_loss(batch.observations)
++                self.rnd.optimizer.zero_grad(set_to_none=True)
++                rnd_loss.backward()
++                if self.is_multi_gpu:
++                    self._reduce_gradients(self.rnd.parameters())
++                self.rnd.optimizer.step()
++                totals["rnd"] += rnd_loss.item()
++
++            totals["critic1"] += critic1_loss.item()
++            totals["critic2"] += critic2_loss.item()
++            totals["actor"] += actor_loss.item()
++            totals["alpha"] += alpha_loss.item()
++            if self.symmetry:
++                totals["symmetry"] += symmetry_loss.item()
++            self.update_step += 1
++            num_updates += 1
++
++        for key in ("critic1", "critic2", "alpha", "rnd"):
++            if key in totals:
++                totals[key] /= num_updates
++        totals["actor"] /= max(actor_updates, 1)
++        if "symmetry" in totals:
++            totals["symmetry"] /= max(actor_updates, 1)
++        return totals
++
++    def train_mode(self) -> None:
++        """Set all learnable components to training mode."""
++        self.actor.train()
++        self.critic.train()
++        if self.rnd:
++            self.rnd.train()
++
++    def eval_mode(self) -> None:
++        """Set all learnable components to evaluation mode."""
++        self.actor.eval()
++        self.critic.eval()
++        if self.rnd:
++            self.rnd.eval()
++
++    def get_policy(self) -> SACActorModel:
++        """Return the actor used for inference and export."""
++        return self.actor
++
++    def save(self) -> dict:
++        """Build a checkpoint dictionary for models and optimizers."""
++        saved = {
++            "actor_state_dict": self.actor.state_dict(),
++            "critic_state_dict": self.critic.state_dict(),
++            "actor_optimizer_state_dict": self.actor_optimizer.state_dict(),
++            "critic_optimizer_state_dict": self.critic_optimizer.state_dict(),
++            "log_alpha": self.log_alpha.detach().cpu(),
++            "update_step": self.update_step,
++        }
++        if self.alpha_optimizer:
++            saved["alpha_optimizer_state_dict"] = self.alpha_optimizer.state_dict()
++        if self.rnd:
++            saved["rnd_state_dict"] = self.rnd.state_dict()
++            saved["rnd_optimizer_state_dict"] = self.rnd.optimizer.state_dict()
++        return saved
++
++    def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
++        """Restore selected checkpoint components and report iteration restoration."""
++        if load_cfg is None:
++            load_cfg = {"actor": True, "critic": True, "optimizer": True, "iteration": True, "rnd": True}
++        if load_cfg.get("actor"):
++            self.actor.load_state_dict(loaded_dict["actor_state_dict"], strict=strict)
++        if load_cfg.get("critic"):
++            self.critic.load_state_dict(loaded_dict["critic_state_dict"], strict=strict)
++        if load_cfg.get("optimizer"):
++            self.actor_optimizer.load_state_dict(loaded_dict["actor_optimizer_state_dict"])
++            self.critic_optimizer.load_state_dict(loaded_dict["critic_optimizer_state_dict"])
++            if self.alpha_optimizer and "alpha_optimizer_state_dict" in loaded_dict:
++                self.alpha_optimizer.load_state_dict(loaded_dict["alpha_optimizer_state_dict"])
++            self.log_alpha.data.copy_(loaded_dict["log_alpha"].to(self.device))
++            self.update_step = loaded_dict.get("update_step", 0)
++        if load_cfg.get("rnd") and self.rnd:
++            self.rnd.load_state_dict(loaded_dict["rnd_state_dict"], strict=strict)
++            self.rnd.optimizer.load_state_dict(loaded_dict["rnd_optimizer_state_dict"])
++        return load_cfg.get("iteration", False)
++
++    def clear_storage(self) -> None:
++        """Discard all replay contents."""
++        self.replay_buffer.clear()
++
++    @staticmethod
++    def construct_algorithm(obs: TensorDict, env: VecEnv, cfg: dict, device: str) -> SAC:
++        """Construct SAC models and replay storage from an RSL-RL configuration."""
++        alg_class: type[SAC] = resolve_callable(cfg["algorithm"].pop("class_name"))  # type: ignore
++        actor_class: type[SACActorModel] = resolve_callable(cfg["actor"].pop("class_name"))  # type: ignore
++        critic_class: type[SACCriticModel] = resolve_callable(cfg["critic"].pop("class_name"))  # type: ignore
++
++        default_sets = ["actor", "critic"]
++        if cfg["algorithm"].get("rnd_cfg") is not None:
++            default_sets.append("rnd_state")
++        cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], default_sets)
++        cfg["algorithm"] = resolve_rnd_config(cfg["algorithm"], obs, cfg["obs_groups"], env)
++        cfg["algorithm"] = resolve_symmetry_config(cfg["algorithm"], env)
++
++        actor = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **cfg["actor"]).to(device)
++        critic = critic_class(
++            obs,
++            cfg["obs_groups"],
++            "critic",
++            1,
++            num_actions=env.num_actions,
++            **cfg["critic"],
++        ).to(device)
++        print(f"SAC Actor Model: {actor}")
++        print(f"SAC Critic Model: {critic}")
++
++        replay_buffer = ReplayBuffer(
++            num_envs=env.num_envs,
++            obs=obs,
++            actions_shape=[env.num_actions],
++            device=device,
++            buffer_size=cfg["algorithm"].get("replay_buffer_size", 1_000_000),
++            n_steps=cfg["algorithm"].get("n_steps", 1),
++            gamma=cfg["algorithm"].get("gamma", 0.998),
++        )
++        return alg_class(
++            actor,
++            critic,
++            replay_buffer,
++            device=device,
++            **cfg["algorithm"],
++            multi_gpu_cfg=cfg.get("multi_gpu"),
++        )
++
++    def broadcast_parameters(self) -> None:
++        """Broadcast actor, critic, and optional RND state from rank zero."""
++        model_states = [self.actor.state_dict(), self.critic.state_dict()]
++        if self.rnd:
++            model_states.append(self.rnd.predictor.state_dict())
++        torch.distributed.broadcast_object_list(model_states, src=0)
++        self.actor.load_state_dict(model_states[0])
++        self.critic.load_state_dict(model_states[1])
++        if self.rnd:
++            self.rnd.predictor.load_state_dict(model_states[2])
++
++    def _reduce_gradients(self, parameters: Iterable[nn.Parameter]) -> None:
++        parameters = list(parameters)
++        gradients = [parameter.grad.reshape(-1) for parameter in parameters if parameter.grad is not None]
++        if not gradients:
++            return
++        flat = torch.cat(gradients)
++        torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
++        flat /= self.gpu_world_size
++        offset = 0
++        for parameter in parameters:
++            if parameter.grad is not None:
++                count = parameter.numel()
++                parameter.grad.copy_(flat[offset : offset + count].view_as(parameter.grad))
++                offset += count
++
++    def _compute_symmetry_loss(self, obs: TensorDict, original_batch_size: int) -> torch.Tensor:
++        if not self.symmetry.use_data_augmentation:  # type: ignore[union-attr]
++            obs, _ = self.symmetry.data_augmentation_func(  # type: ignore[union-attr]
++                env=self.symmetry.env,
++                obs=obs,
++                actions=None,  # type: ignore[union-attr]
++            )
++        mean_actions = self.actor(obs)
++        _, symmetric_actions = self.symmetry.data_augmentation_func(  # type: ignore[union-attr]
++            env=self.symmetry.env,  # type: ignore[union-attr]
++            obs=None,
++            actions=mean_actions[:original_batch_size],
++        )
++        if mean_actions.shape[0] == original_batch_size:
++            return torch.zeros((), device=self.device)
++        loss = nn.functional.mse_loss(
++            mean_actions[original_batch_size:],
++            symmetric_actions.detach()[original_batch_size:],
++        )
++        return loss if self.symmetry.use_mirror_loss else loss.detach()  # type: ignore[union-attr]
++
++    @staticmethod
++    def _as_tensordict(observations: TensorDict | dict, template: TensorDict) -> TensorDict:
++        if isinstance(observations, TensorDict):
++            return observations
++        if isinstance(observations, dict):
++            return TensorDict(observations, batch_size=template.batch_size, device=template.device)
++        raise TypeError(f"Expected timeout observations to be TensorDict or dict, got {type(observations)}.")
++
++    @staticmethod
++    def _repeat_batch(tensor: torch.Tensor, repeats: int) -> torch.Tensor:
++        return tensor.repeat(repeats, *([1] * (tensor.ndim - 1)))
+diff --git a/work/code/rsl_rl-local/rsl_rl/algorithms/spo.py b/work/code/rsl_rl-local/rsl_rl/algorithms/spo.py
+index 900a3ac..789c857 100644
+--- a/work/code/rsl_rl-local/rsl_rl/algorithms/spo.py
++++ b/work/code/rsl_rl-local/rsl_rl/algorithms/spo.py
+@@ -17,6 +17,13 @@ from rsl_rl.models import MLPModel
+ from rsl_rl.storage import RolloutStorage
+ from rsl_rl.utils import compile_model, resolve_callable, resolve_obs_groups, resolve_optimizer
+ 
++from .transition_handling import (
++    compute_gae_returns,
++    configure_timeout_transition,
++    masked_mean,
++    normalize_valid,
++)
++
+ 
+ class SPO:
+     """Simple Policy Optimization algorithm.
+@@ -146,7 +153,6 @@ class SPO:
+             self.rnd.update_normalization(obs)
+ 
+         # Record the rewards and dones
+-        # Note: We clone here because later on we bootstrap the rewards based on timeouts
+         self.transition.rewards = rewards.clone()
+         self.transition.dones = dones
+ 
+@@ -157,12 +163,15 @@ class SPO:
+             # Add intrinsic rewards to extrinsic rewards
+             self.transition.rewards += self.intrinsic_rewards
+ 
+-        # Bootstrapping on time outs
+-        if "time_outs" in extras:
+-            self.transition.rewards += self.gamma * torch.squeeze(
+-                self.transition.values * extras["time_outs"].unsqueeze(1).to(self.device),  # type: ignore
+-                1,
+-            )
++        configure_timeout_transition(
++            self.storage,
++            self.transition,
++            obs,
++            dones,
++            extras,
++            self._evaluate_bootstrap_values,
++            self.device,
++        )
+ 
+         # Record the transition
+         self.storage.add_transition(self.transition)
+@@ -179,24 +188,17 @@ class SPO:
+         last_values = self.critic(obs).detach()
+         # Restore the critic's hidden state so the next rollout is not affected by the forward pass
+         self.critic.reset(hidden_state=critic_hidden_state)
+-        # Compute returns and advantages
+-        advantage = 0
+-        for step in reversed(range(st.num_transitions_per_env)):
+-            # If we are at the last step, bootstrap the return value
+-            next_values = last_values if step == st.num_transitions_per_env - 1 else st.values[step + 1]
+-            # 1 if we are not in a terminal state, 0 otherwise
+-            next_is_not_terminal = 1.0 - st.dones[step].float()
+-            # TD error: r_t + gamma * V(s_{t+1}) - V(s_t)
+-            delta = st.rewards[step] + next_is_not_terminal * self.gamma * next_values - st.values[step]
+-            # Advantage: A(s_t, a_t) = delta_t + gamma * lambda * A(s_{t+1}, a_{t+1})
+-            advantage = delta + next_is_not_terminal * self.gamma * self.lam * advantage
+-            # Return: R_t = A(s_t, a_t) + V(s_t)
+-            st.returns[step] = advantage + st.values[step]
+-        # Compute the advantages
+-        st.advantages = st.returns - st.values
++        compute_gae_returns(st, last_values, self.gamma, self.lam)
+         # Normalize the advantages if per minibatch normalization is not used
+         if not self.normalize_advantage_per_mini_batch:
+-            st.advantages = (st.advantages - st.advantages.mean()) / (st.advantages.std() + 1e-8)
++            st.normalize_advantages()
++
++    def _evaluate_bootstrap_values(self, obs: TensorDict) -> torch.Tensor:
++        """Evaluate final observations without advancing recurrent rollout state."""
++        hidden_state = self.critic.get_hidden_state()
++        values = self.critic(obs).detach()
++        self.critic.reset(hidden_state=hidden_state)
++        return values
+ 
+     # GIỮ NGUYÊN TỪ PPO v5.4.0 trong update(): minibatch, KL schedule,
+     # value loss, entropy, RND, symmetry, optimizer và multi-GPU.
+@@ -220,11 +222,12 @@ class SPO:
+         # Iterate over mini-batches
+         for batch in generator:
+             original_batch_size = batch.observations.batch_size[0]
++            loss_valid = batch.valid if batch.masks is not None else None
+ 
+             # Check if we should normalize advantages per mini-batch
+             if self.normalize_advantage_per_mini_batch:
+                 with torch.no_grad():
+-                    batch.advantages = (batch.advantages - batch.advantages.mean()) / (batch.advantages.std() + 1e-8)  # type: ignore
++                    batch.advantages = normalize_valid(batch.advantages, loss_valid)  # type: ignore[arg-type]
+ 
+             # Perform symmetric augmentation if enabled
+             if self.symmetry:
+@@ -248,7 +251,7 @@ class SPO:
+             if self.desired_kl is not None and self.schedule == "adaptive":
+                 with torch.inference_mode():
+                     kl = self.actor.get_kl_divergence(batch.old_distribution_params, distribution_params)  # type: ignore
+-                    kl_mean = torch.mean(kl)
++                    kl_mean = masked_mean(kl, loss_valid)
+ 
+                     # Reduce the KL divergence across all GPUs
+                     if self.is_multi_gpu:
+@@ -275,21 +278,20 @@ class SPO:
+             # SPO surrogate loss
+             ratio = torch.exp(actions_log_prob - torch.squeeze(batch.old_actions_log_prob))  # type: ignore
+             advantages = torch.squeeze(batch.advantages)  # type: ignore
+-            surrogate_loss = -(
+-                advantages * ratio
+-                - advantages.abs() * (ratio - 1.0).pow(2) / (2.0 * self.clip_param)
+-            ).mean()
++            surrogate = -(advantages * ratio - advantages.abs() * (ratio - 1.0).pow(2) / (2.0 * self.clip_param))
++            surrogate_loss = masked_mean(surrogate, loss_valid)
+ 
+             # Value function loss
+             if self.use_clipped_value_loss:
+                 value_clipped = batch.values + (values - batch.values).clamp(-self.clip_param, self.clip_param)
+                 value_losses = (values - batch.returns).pow(2)
+                 value_losses_clipped = (value_clipped - batch.returns).pow(2)
+-                value_loss = torch.max(value_losses, value_losses_clipped).mean()
++                value_loss = masked_mean(torch.max(value_losses, value_losses_clipped), loss_valid)
+             else:
+-                value_loss = (batch.returns - values).pow(2).mean()
++                value_loss = masked_mean((batch.returns - values).pow(2), loss_valid)
+ 
+-            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
++            entropy_mean = masked_mean(entropy, loss_valid)
++            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_mean
+ 
+             # RND loss
+             rnd_loss = self.rnd.compute_loss(batch.observations[:original_batch_size]) if self.rnd else None  # type: ignore
+@@ -323,7 +325,7 @@ class SPO:
+             # Store the losses
+             mean_value_loss += value_loss.item()
+             mean_surrogate_loss += surrogate_loss.item()
+-            mean_entropy += entropy.mean().item()
++            mean_entropy += entropy_mean.item()
+             # RND loss
+             if mean_rnd_loss is not None:
+                 mean_rnd_loss += rnd_loss.item()
+diff --git a/work/code/rsl_rl-local/rsl_rl/models/__init__.py b/work/code/rsl_rl-local/rsl_rl/models/__init__.py
+index 1f5f1b3..7073d98 100644
+--- a/work/code/rsl_rl-local/rsl_rl/models/__init__.py
++++ b/work/code/rsl_rl-local/rsl_rl/models/__init__.py
+@@ -9,6 +9,7 @@ from .cnn_model import CNNModel
+ from .mlp_model import MLPModel
+ from .reppo_models import ActionValueModel, LayerNormMLPModel
+ from .rnn_model import RNNModel
++from .sac_models import SACActorModel, SACCriticModel
+ 
+ __all__ = [
+     "ActionValueModel",
+@@ -16,5 +17,6 @@ __all__ = [
+     "LayerNormMLPModel",
+     "MLPModel",
+     "RNNModel",
++    "SACActorModel",
++    "SACCriticModel",
+ ]
+-
+diff --git a/work/code/rsl_rl-local/rsl_rl/modules/distribution.py b/work/code/rsl_rl-local/rsl_rl/modules/distribution.py
+index d4ed653..bc6161c 100644
+--- a/work/code/rsl_rl-local/rsl_rl/modules/distribution.py
++++ b/work/code/rsl_rl-local/rsl_rl/modules/distribution.py
+@@ -348,7 +348,7 @@ class TanhGaussianDistribution(Distribution):
+         init_std: float = 1.0,
+         std_range: tuple[float, float] = (1e-4, 10.0),
+         std_type: str = "log",
+-        action_range: tuple[float, float] = (-1.0, 1.0),
++        action_range: tuple[float | list[float] | torch.Tensor, float | list[float] | torch.Tensor] = (-1.0, 1.0),
+     ) -> None:
+         """Initialize the state-dependent base Gaussian and action transform."""
+         super().__init__(output_dim)
+@@ -358,16 +358,24 @@ class TanhGaussianDistribution(Distribution):
+             raise ValueError(f"init_std must be positive, got {init_std}.")
+         if std_range[0] <= 0.0 or std_range[1] <= std_range[0]:
+             raise ValueError(f"Invalid standard-deviation range: {std_range}.")
+-        if action_range[1] <= action_range[0]:
+-            raise ValueError(f"Invalid action range: {action_range}.")
+-
+         self.init_std = init_std
+         self.std_type = std_type
+-        self.std_range = (max(std_range[0], 1e-6), std_range[1])
++        self.std_range = std_range
+         self.log_std_range = (float(np.log(self.std_range[0])), float(np.log(self.std_range[1])))
+         self.action_range = action_range
+-        self._action_scale = (action_range[1] - action_range[0]) / 2.0
+-        self._action_offset = (action_range[1] + action_range[0]) / 2.0
++        action_low = torch.as_tensor(action_range[0], dtype=torch.float)
++        action_high = torch.as_tensor(action_range[1], dtype=torch.float)
++        if action_low.numel() not in (1, output_dim) or action_high.numel() not in (1, output_dim):
++            raise ValueError(
++                f"Action bounds must be scalar or contain {output_dim} elements, got "
++                f"{action_low.numel()} and {action_high.numel()}."
++            )
++        action_low = action_low.expand(output_dim).clone()
++        action_high = action_high.expand(output_dim).clone()
++        if torch.any(action_high <= action_low):
++            raise ValueError(f"Invalid action range: {action_range}.")
++        self.register_buffer("_action_scale", (action_high - action_low) / 2.0)
++        self.register_buffer("_action_offset", (action_high + action_low) / 2.0)
+ 
+         self._base_distribution: Normal | None = None
+         self._distribution: TransformedDistribution | None = None
+@@ -388,9 +396,10 @@ class TanhGaussianDistribution(Distribution):
+         self._mean = mean
+         self._std = std
+         self._base_distribution = Normal(mean, std)
+-        transforms = [TanhTransform(cache_size=1)]
+-        if self.action_range != (-1.0, 1.0):
+-            transforms.append(AffineTransform(loc=self._action_offset, scale=self._action_scale))
++        transforms = [
++            TanhTransform(cache_size=1),
++            AffineTransform(loc=self._action_offset, scale=self._action_scale),
++        ]
+         self._distribution = TransformedDistribution(self._base_distribution, transforms)
+ 
+     def sample(self, sample_shape: torch.Size = _EMPTY_SAMPLE_SHAPE) -> torch.Tensor:
+@@ -429,7 +438,7 @@ class TanhGaussianDistribution(Distribution):
+     @property
+     def entropy(self) -> torch.Tensor:
+         """Base entropy plus affine scaling (tanh term omitted)."""
+-        affine_log_scale = np.log(abs(self._action_scale))
++        affine_log_scale = torch.log(self._action_scale.abs())
+         return (self._base_distribution.entropy() + affine_log_scale).sum(dim=-1)  # type: ignore
+ 
+     @property
+@@ -608,10 +617,10 @@ class _BetaDeterministicOutput(nn.Module):
+ class _TanhDeterministicOutput(nn.Module):
+     """Exportable tanh and affine transform for deterministic actions."""
+ 
+-    def __init__(self, action_scale: float, action_offset: float) -> None:
++    def __init__(self, action_scale: float | torch.Tensor, action_offset: float | torch.Tensor) -> None:
+         super().__init__()
+-        self.action_scale = action_scale
+-        self.action_offset = action_offset
++        self.register_buffer("action_scale", torch.as_tensor(action_scale).clone())
++        self.register_buffer("action_offset", torch.as_tensor(action_offset).clone())
+ 
+     def forward(self, mlp_output: torch.Tensor) -> torch.Tensor:
+         mean = mlp_output[..., 0, :]
+diff --git a/work/code/rsl_rl-local/rsl_rl/runners/__init__.py b/work/code/rsl_rl-local/rsl_rl/runners/__init__.py
+index a6804ec..cc78bcf 100644
+--- a/work/code/rsl_rl-local/rsl_rl/runners/__init__.py
++++ b/work/code/rsl_rl-local/rsl_rl/runners/__init__.py
+@@ -7,5 +7,6 @@
+ 
+ from .on_policy_runner import OnPolicyRunner  # noqa: I001
+ from .distillation_runner import DistillationRunner
++from .off_policy_runner import OffPolicyRunner
+ 
+-__all__ = ["DistillationRunner", "OnPolicyRunner"]
++__all__ = ["DistillationRunner", "OffPolicyRunner", "OnPolicyRunner"]
+diff --git a/work/code/rsl_rl-local/rsl_rl/runners/on_policy_runner.py b/work/code/rsl_rl-local/rsl_rl/runners/on_policy_runner.py
+index 2ce9fda..8dd8356 100644
+--- a/work/code/rsl_rl-local/rsl_rl/runners/on_policy_runner.py
++++ b/work/code/rsl_rl-local/rsl_rl/runners/on_policy_runner.py
+@@ -38,6 +38,11 @@ class OnPolicyRunner:
+         # Create the algorithm
+         alg_class: type[PPO] = resolve_callable(self.cfg["algorithm"]["class_name"])  # type: ignore
+         self.alg = alg_class.construct_algorithm(obs, self.env, self.cfg, self.device)
++        # Mjlab currently routes every RL task through its OnPolicyRunner subclass.
++        # Detect replay-based algorithms here so they can use that entrypoint
++        # without requiring a simulator-side runner patch.
++        self.is_off_policy = hasattr(self.alg, "replay_buffer")
++        self.start_training = self.cfg.get("start_training", 0)
+ 
+         # Create the logger
+         self.logger = Logger(
+@@ -93,7 +98,7 @@ class OnPolicyRunner:
+                     # Process the step
+                     self.alg.process_env_step(obs, rewards, dones, extras)
+                     # Extract intrinsic rewards if RND is used (only for logging)
+-                    intrinsic_rewards = self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None
++                    intrinsic_rewards = self.alg.intrinsic_rewards if self.cfg["algorithm"].get("rnd_cfg") else None
+                     # Book keeping
+                     self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
+ 
+@@ -101,11 +106,21 @@ class OnPolicyRunner:
+                 collect_time = stop - start
+                 start = stop
+ 
+-                # Compute returns
+-                self.alg.compute_returns(obs)
++                # On-policy algorithms need a rollout-wide return pass. Replay
++                # algorithms construct targets while sampling their buffer.
++                if not self.is_off_policy:
++                    self.alg.compute_returns(obs)
+ 
+             # Update policy
+-            loss_dict = self.alg.update()
++            replay_ready = (
++                self.alg.replay_buffer.can_sample()  # type: ignore[attr-defined]
++                if self.is_off_policy
++                else True
++            )
++            if not self.is_off_policy or (it >= self.start_training and replay_ready):
++                loss_dict = self.alg.update()
++            else:
++                loss_dict = {}
+ 
+             stop = time.time()
+             learn_time = stop - start
+@@ -119,9 +134,10 @@ class OnPolicyRunner:
+                 collect_time=collect_time,
+                 learn_time=learn_time,
+                 loss_dict=loss_dict,
+-                learning_rate=self.alg.learning_rate,
++                learning_rate=getattr(self.alg, "learning_rate", getattr(self.alg, "actor_learning_rate", 0.0)),
+                 action_std=self.alg.get_policy().output_std,
+-                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,
++                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"].get("rnd_cfg") else None,
++                alpha=getattr(self.alg, "alpha", None),
+             )
+ 
+             # Save model
+diff --git a/work/code/rsl_rl-local/rsl_rl/storage/__init__.py b/work/code/rsl_rl-local/rsl_rl/storage/__init__.py
+index 9dc4cb9..68890de 100644
+--- a/work/code/rsl_rl-local/rsl_rl/storage/__init__.py
++++ b/work/code/rsl_rl-local/rsl_rl/storage/__init__.py
+@@ -6,5 +6,6 @@
+ """Storage for the learning algorithms."""
+ 
+ from .rollout_storage import RolloutStorage
++from .replay_buffer import ReplayBuffer
+ 
+-__all__ = ["RolloutStorage"]
++__all__ = ["ReplayBuffer", "RolloutStorage"]
+diff --git a/work/code/rsl_rl-local/rsl_rl/storage/rollout_storage.py b/work/code/rsl_rl-local/rsl_rl/storage/rollout_storage.py
+index cf7ec4f..b0cc4eb 100644
+--- a/work/code/rsl_rl-local/rsl_rl/storage/rollout_storage.py
++++ b/work/code/rsl_rl-local/rsl_rl/storage/rollout_storage.py
+@@ -7,6 +7,7 @@
+ from __future__ import annotations
+ 
+ import torch
++import warnings
+ from collections.abc import Generator
+ from tensordict import TensorDict
+ 
+@@ -42,6 +43,15 @@ class RolloutStorage:
+             self.dones: torch.Tensor | None = None
+             """Done flags indicating episode termination."""
+ 
++            self.valid: torch.Tensor | None = None
++            """Whether the transition has a trustworthy next observation."""
++
++            self.bootstrap: torch.Tensor | None = None
++            """Whether this transition is an explicit bootstrap boundary."""
++
++            self.bootstrap_values: torch.Tensor | None = None
++            """Value estimates at explicit bootstrap boundaries."""
++
+             # For reinforcement learning
+             self.values: torch.Tensor | None = None
+             """Value estimates at the current step (RL only)."""
+@@ -84,6 +94,7 @@ class RolloutStorage:
+             masks: torch.Tensor | None = None,
+             privileged_actions: torch.Tensor | None = None,
+             dones: torch.Tensor | None = None,
++            valid: torch.Tensor | None = None,
+         ) -> None:
+             """Initialize a batch container over rollout data."""
+             self.observations: TensorDict | None = observations
+@@ -115,6 +126,9 @@ class RolloutStorage:
+             self.dones: torch.Tensor | None = dones
+             """Batch of done flags (distillation only)."""
+ 
++            self.valid: torch.Tensor | None = valid
++            """Mask selecting transitions with trustworthy learning targets."""
++
+             # For recurrent networks
+             self.hidden_states: tuple[HiddenState, HiddenState] = hidden_states
+             """Batch of hidden states for recurrent networks (RL recurrent only)."""
+@@ -158,6 +172,9 @@ class RolloutStorage:
+         # For reinforcement learning
+         if training_type == "rl":
+             self.values = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
++            self.valid = torch.ones(num_transitions_per_env, num_envs, 1, dtype=torch.bool, device=self.device)
++            self.bootstrap = torch.zeros(num_transitions_per_env, num_envs, 1, dtype=torch.bool, device=self.device)
++            self.bootstrap_values = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+             self.actions_log_prob = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+             self.distribution_params: tuple[torch.Tensor, ...] | None = None  # Lazily initialized on first transition
+             self.returns = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+@@ -189,6 +206,18 @@ class RolloutStorage:
+         # For reinforcement learning
+         if self.training_type == "rl":
+             self.values[self.step].copy_(transition.values)  # type: ignore
++            if transition.valid is None:
++                self.valid[self.step].fill_(True)
++            else:
++                self.valid[self.step].copy_(transition.valid.view(-1, 1).bool())
++            if transition.bootstrap is None:
++                self.bootstrap[self.step].fill_(False)
++            else:
++                self.bootstrap[self.step].copy_(transition.bootstrap.view(-1, 1).bool())
++            if transition.bootstrap_values is None:
++                self.bootstrap_values[self.step].zero_()
++            else:
++                self.bootstrap_values[self.step].copy_(transition.bootstrap_values.view(-1, 1))
+             self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
+             if self.distribution_params is None:  # Initialize the distribution parameters
+                 self.distribution_params = tuple(
+@@ -204,6 +233,43 @@ class RolloutStorage:
+         # Increment the counter
+         self.step += 1
+ 
++    def mark_last_transition_as_bootstrap(self, env_mask: torch.Tensor, bootstrap_values: torch.Tensor) -> torch.Tensor:
++        """Turn the previous valid transition into a non-terminal rollout boundary.
++
++        This is used when an auto-reset environment reports a timeout but does not
++        expose the observation immediately before reset. The timeout-causing
++        transition cannot be trained, but its current observation is still the
++        trustworthy next observation of the preceding transition.
++
++        Returns:
++            Boolean mask of environments for which a previous valid transition was
++            available and marked.
++        """
++        if self.training_type != "rl":
++            raise ValueError("Bootstrap boundaries are only available for reinforcement-learning storage.")
++        marked = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
++        if self.step == 0:
++            return marked
++        requested = env_mask.to(self.device).view(-1).bool()
++        marked = requested & self.valid[self.step - 1].view(-1)
++        if marked.any():
++            self.bootstrap[self.step - 1, marked] = True
++            self.bootstrap_values[self.step - 1, marked] = bootstrap_values.to(self.device).view(-1, 1)[marked]
++        return marked
++
++    def normalize_advantages(self) -> None:
++        """Normalize advantages over valid transitions only."""
++        if self.training_type != "rl":
++            raise ValueError("Advantages are only available for reinforcement-learning storage.")
++        mask = self.valid
++        if not mask.any():
++            raise ValueError("The rollout does not contain any valid transitions.")
++        valid_advantages = self.advantages[mask]
++        mean = valid_advantages.mean()
++        std = valid_advantages.std(unbiased=False)
++        self.advantages.zero_()
++        self.advantages[mask] = (valid_advantages - mean) / (std + 1e-8)
++
+     def clear(self) -> None:
+         """Reset the write cursor for the next rollout."""
+         self.step = 0
+@@ -226,9 +292,16 @@ class RolloutStorage:
+         """Yield shuffled flat mini-batches for feedforward RL updates."""
+         if self.training_type != "rl":
+             raise ValueError("This function is only available for reinforcement learning training.")
+-        batch_size = self.num_envs * self.num_transitions_per_env
+-        mini_batch_size = batch_size // num_mini_batches
+-        indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device)
++        valid_indices = self.valid.flatten().nonzero(as_tuple=False).squeeze(-1)
++        valid_count = valid_indices.numel()
++        if valid_count == 0:
++            raise ValueError("The rollout does not contain any valid transitions.")
++        if valid_count < num_mini_batches:
++            warnings.warn(
++                f"Only {valid_count} valid transitions are available for {num_mini_batches} mini-batches; "
++                "sampling valid transitions with replacement.",
++                RuntimeWarning,
++            )
+ 
+         # Flatten the data
+         observations = self.observations.flatten(0, 1)
+@@ -240,12 +313,11 @@ class RolloutStorage:
+         old_distribution_params = tuple(p.flatten(0, 1) for p in self.distribution_params)  # type: ignore
+ 
+         for epoch in range(num_epochs):
+-            for i in range(num_mini_batches):
+-                # Select the indices for the mini-batch
+-                start = i * mini_batch_size
+-                stop = (i + 1) * mini_batch_size
+-                batch_idx = indices[start:stop]
+-
++            if valid_count < num_mini_batches:
++                epoch_indices = valid_indices[torch.randint(valid_count, (num_mini_batches,), device=self.device)]
++            else:
++                epoch_indices = valid_indices[torch.randperm(valid_count, device=self.device)]
++            for batch_idx in torch.tensor_split(epoch_indices, num_mini_batches):
+                 # Yield the mini-batch
+                 yield RolloutStorage.Batch(
+                     observations=observations[batch_idx],  # type: ignore
+@@ -255,6 +327,7 @@ class RolloutStorage:
+                     returns=returns[batch_idx],
+                     old_actions_log_prob=old_actions_log_prob[batch_idx],
+                     old_distribution_params=tuple(p[batch_idx] for p in old_distribution_params),
++                    valid=torch.ones(batch_idx.numel(), 1, dtype=torch.bool, device=self.device),
+                 )
+ 
+     # For reinforcement learning with recurrent networks
+@@ -264,7 +337,8 @@ class RolloutStorage:
+         """Yield trajectory mini-batches with masks and recurrent hidden states."""
+         if self.training_type != "rl":
+             raise ValueError("This function is only available for reinforcement learning training.")
+-        padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
++        trajectory_dones = self.dones.bool() | ~self.valid
++        padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, trajectory_dones)
+         mini_batch_size = self.num_envs // num_mini_batches
+ 
+         for ep in range(num_epochs):
+@@ -274,7 +348,7 @@ class RolloutStorage:
+                 start = i * mini_batch_size
+                 stop = (i + 1) * mini_batch_size
+ 
+-                dones = self.dones.squeeze(-1)
++                dones = trajectory_dones.squeeze(-1)
+                 last_was_done = torch.zeros_like(dones, dtype=torch.bool)
+                 last_was_done[1:] = dones[:-1]
+                 last_was_done[0] = True
+@@ -289,7 +363,8 @@ class RolloutStorage:
+                 # take a batch of trajectories and finally reshape back to [num_layers, batch, hidden_dim]
+                 if self.saved_hidden_state_a is not None:
+                     hidden_state_a_batch = [
+-                        saved_hidden_state.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
++                        saved_hidden_state
++                        .permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
+                         .transpose(1, 0)
+                         .contiguous()
+                         for saved_hidden_state in self.saved_hidden_state_a
+@@ -302,7 +377,8 @@ class RolloutStorage:
+                     hidden_state_a_batch = None
+                 if self.saved_hidden_state_c is not None:
+                     hidden_state_c_batch = [
+-                        saved_hidden_state.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
++                        saved_hidden_state
++                        .permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
+                         .transpose(1, 0)
+                         .contiguous()
+                         for saved_hidden_state in self.saved_hidden_state_c
+@@ -324,6 +400,7 @@ class RolloutStorage:
+                     old_distribution_params=tuple(p[:, start:stop] for p in self.distribution_params),  # type: ignore
+                     hidden_states=(hidden_state_a_batch, hidden_state_c_batch),  # type: ignore
+                     masks=trajectory_masks[:, first_traj:last_traj],
++                    valid=self.valid[:, start:stop],
+                 )
+ 
+                 first_traj = last_traj
+diff --git a/work/code/rsl_rl-local/rsl_rl/utils/logger.py b/work/code/rsl_rl-local/rsl_rl/utils/logger.py
+index 93af3c5..4c47470 100644
+--- a/work/code/rsl_rl-local/rsl_rl/utils/logger.py
++++ b/work/code/rsl_rl-local/rsl_rl/utils/logger.py
+@@ -56,7 +56,7 @@ class Logger:
+         self.cur_episode_length = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+ 
+         # Create RND buffers
+-        if self.cfg["algorithm"]["rnd_cfg"]:
++        if self.cfg["algorithm"].get("rnd_cfg"):
+             self.erewbuffer = deque(maxlen=100)
+             self.irewbuffer = deque(maxlen=100)
+             self.cur_ereward_sum = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+@@ -164,6 +164,8 @@ class Logger:
+         learning_rate: float,
+         action_std: torch.Tensor,
+         rnd_weight: float | None,
++        alpha: float | None = None,
++        collection_size_override: int | None = None,
+         print_minimal: bool = False,
+         width: int = 80,
+         pad: int = 40,
+@@ -173,7 +175,9 @@ class Logger:
+         If videos are available, they are uploaded to the logging service (W&B) as well.
+         """
+         if self.writer is not None:
+-            collection_size = self.cfg["num_steps_per_env"] * self.num_envs * self.gpu_world_size
++            collection_size = collection_size_override or (
++                self.cfg["num_steps_per_env"] * self.num_envs * self.gpu_world_size
++            )
+             iteration_time = collect_time + learn_time
+             self.tot_timesteps += collection_size
+             self.tot_time += iteration_time
+@@ -209,6 +213,8 @@ class Logger:
+ 
+             # Log std
+             self.writer.add_scalar("Policy/mean_std", action_std.mean().item(), it)
++            if alpha is not None:
++                self.writer.add_scalar("Policy/alpha", alpha, it)
+ 
+             # Log performance
+             fps = int(collection_size / (collect_time + learn_time))
+@@ -218,7 +224,7 @@ class Logger:
+ 
+             # Log rewards and episode length
+             if len(self.rewbuffer) > 0:
+-                if self.cfg["algorithm"]["rnd_cfg"]:
++                if self.cfg["algorithm"].get("rnd_cfg"):
+                     self.writer.add_scalar("Rnd/mean_extrinsic_reward", statistics.mean(self.erewbuffer), it)
+                     self.writer.add_scalar("Rnd/mean_intrinsic_reward", statistics.mean(self.irewbuffer), it)
+                     self.writer.add_scalar("Rnd/weight", rnd_weight, it)  # type: ignore
+@@ -254,7 +260,7 @@ class Logger:
+ 
+             # Print rewards and episode length
+             if len(self.rewbuffer) > 0:
+-                if self.cfg["algorithm"]["rnd_cfg"]:
++                if self.cfg["algorithm"].get("rnd_cfg"):
+                     log_string += f"""{"Mean extrinsic reward:":>{pad}} {statistics.mean(self.erewbuffer):.2f}\n"""
+                     log_string += f"""{"Mean intrinsic reward:":>{pad}} {statistics.mean(self.irewbuffer):.2f}\n"""
+                 log_string += f"""{"Mean reward:":>{pad}} {statistics.mean(self.rewbuffer):.2f}\n"""
+@@ -262,6 +268,8 @@ class Logger:
+ 
+             # Print std
+             log_string += f"""{"Mean action std:":>{pad}} {action_std.mean().item():.2f}\n"""
++            if alpha is not None:
++                log_string += f"""{"Entropy alpha:":>{pad}} {alpha:.4f}\n"""
+ 
+             # Print episode extras
+             if not print_minimal:
+diff --git a/work/code/rsl_rl-local/tests/algorithms/test_ppo.py b/work/code/rsl_rl-local/tests/algorithms/test_ppo.py
+index eb3727e..fc1aca3 100644
+--- a/work/code/rsl_rl-local/tests/algorithms/test_ppo.py
++++ b/work/code/rsl_rl-local/tests/algorithms/test_ppo.py
+@@ -200,29 +200,31 @@ class TestGAEComputation:
+ class TestTimeoutBootstrapping:
+     """Tests for timeout bootstrapping in ``process_env_step``."""
+ 
+-    def test_timeout_adds_bootstrap_to_reward(self) -> None:
+-        """When time_outs is set, stored reward should include gamma * value * timeout."""
++    def test_missing_final_observation_drops_timeout_and_marks_previous_boundary(self) -> None:
++        """A timeout without final observation must not learn from the reset state."""
+         ppo, obs = _build_ppo()
+ 
+-        # Manually act to populate transition.values
++        # Store one normal transition first.
+         ppo.act(obs)
+-        stored_values = ppo.transition.values.clone()
++        ppo.process_env_step(obs, torch.ones(NUM_ENVS), torch.zeros(NUM_ENVS), {})
+ 
++        # The next transition times out only in env 0 and has no final observation.
++        ppo.act(obs)
++        timeout_values = ppo.transition.values.clone()
+         raw_reward = torch.ones(NUM_ENVS)
+-        dones = torch.ones(NUM_ENVS)
++        dones = torch.zeros(NUM_ENVS)
++        dones[0] = 1.0
+         time_outs = torch.zeros(NUM_ENVS)
+-        time_outs[0] = 1.0  # Only env 0 times out
++        time_outs[0] = 1.0
+ 
+         ppo.process_env_step(obs, raw_reward, dones, {"time_outs": time_outs})
+ 
+-        # The stored reward for env 0 should be: 1.0 + gamma * value[0]
+-        stored_reward_env0 = ppo.storage.rewards[0, 0, 0].item()
+-        expected = 1.0 + ppo.gamma * stored_values[0, 0].item()
+-        assert abs(stored_reward_env0 - expected) < 1e-5
+-
+-        # Env 1 should have raw reward only
+-        stored_reward_env1 = ppo.storage.rewards[0, 1, 0].item()
+-        assert abs(stored_reward_env1 - 1.0) < 1e-5
++        assert not ppo.storage.valid[1, 0, 0]
++        assert ppo.storage.valid[1, 1, 0]
++        assert ppo.storage.bootstrap[0, 0, 0]
++        assert torch.allclose(ppo.storage.bootstrap_values[0, 0], timeout_values[0])
++        # Rewards are never rewritten; the invalid timeout reward is simply excluded.
++        assert torch.isclose(ppo.storage.rewards[1, 0, 0], torch.tensor(1.0))
+ 
+ 
+ class TestPPOLosses:
+diff --git a/work/code/rsl_rl-local/tests/runners/test_on_policy_runner.py b/work/code/rsl_rl-local/tests/runners/test_on_policy_runner.py
+index e396208..2578fc8 100644
+--- a/work/code/rsl_rl-local/tests/runners/test_on_policy_runner.py
++++ b/work/code/rsl_rl-local/tests/runners/test_on_policy_runner.py
+@@ -133,6 +133,35 @@ def _build_runner(log_dir: str | None = None, model_type: str = "mlp") -> OnPoli
+     return OnPolicyRunner(env, cfg, log_dir=log_dir, device="cpu")
+ 
+ 
++def _make_sac_cfg() -> dict:
++    """Return a minimal SAC config routed through the existing runner entrypoint."""
++    return {
++        "num_steps_per_env": 2,
++        "save_interval": 100,
++        "start_training": 0,
++        "obs_groups": {"actor": ["policy"], "critic": ["policy"]},
++        "actor": {
++            "class_name": "SACActorModel",
++            "hidden_dims": [32, 32],
++        },
++        "critic": {
++            "class_name": "SACCriticModel",
++            "hidden_dims": [32, 32],
++        },
++        "algorithm": {
++            "class_name": "SAC",
++            "replay_buffer_size": 128,
++            "num_learning_epochs": 1,
++            "num_mini_batches": 1,
++            "mini_batch_size": 8,
++            "policy_frequency": 1,
++            "n_steps": 2,
++            "rnd_cfg": None,
++            "symmetry_cfg": None,
++        },
++    }
++
++
+ class TestRunnerConstruction:
+     """Tests for constructing the runner and its components."""
+ 
+@@ -171,6 +200,17 @@ class TestLearnLoop:
+         runner.learn(num_learning_iterations=3)
+         assert runner.current_learning_iteration == 2
+ 
++    def test_existing_runner_entrypoint_supports_sac(self) -> None:
++        """Replay algorithms should run without replacing Mjlab's runner class."""
++        runner = OnPolicyRunner(DummyEnv(), _make_sac_cfg(), log_dir=None, device="cpu")
++        assert runner.is_off_policy
++        params_before = {name: parameter.clone() for name, parameter in runner.alg.actor.named_parameters()}
++        runner.learn(num_learning_iterations=2)
++        assert runner.alg.replay_buffer.num_valid_transitions > 0
++        assert any(
++            not torch.equal(params_before[name], parameter) for name, parameter in runner.alg.actor.named_parameters()
++        )
++
+ 
+ class TestSaveLoad:
+     """Tests for checkpoint save and load."""

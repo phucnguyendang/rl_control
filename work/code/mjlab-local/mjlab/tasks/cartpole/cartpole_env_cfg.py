@@ -35,6 +35,10 @@ from mjlab.rl import (
   RslRlReppoAlgorithmCfg,
   RslRlReppoCriticCfg,
   RslRlReppoRunnerCfg,
+  RslRlSacActorCfg,
+  RslRlSacAlgorithmCfg,
+  RslRlSacCriticCfg,
+  RslRlSacRunnerCfg,
 )
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
@@ -355,4 +359,43 @@ def cartpole_reppo_runner_cfg() -> RslRlReppoRunnerCfg:
     save_interval=50,
     num_steps_per_env=128,
     max_iterations=250,
+  )
+
+
+def cartpole_sac_runner_cfg() -> RslRlSacRunnerCfg:
+  """Create a SAC runner configuration for Cartpole Swingup."""
+  return RslRlSacRunnerCfg(
+    actor=RslRlSacActorCfg(
+      hidden_dims=(256, 256),
+      activation="elu",
+      obs_normalization=False,
+      action_low=-1.0,
+      action_high=1.0,
+    ),
+    critic=RslRlSacCriticCfg(
+      hidden_dims=(256, 256),
+      activation="elu",
+      obs_normalization=False,
+    ),
+    algorithm=RslRlSacAlgorithmCfg(
+      replay_buffer_size=1_000_000,
+      num_learning_epochs=1,
+      num_mini_batches=16,
+      mini_batch_size=256,
+      actor_learning_rate=3e-4,
+      critic_learning_rate=3e-4,
+      alpha_learning_rate=3e-4,
+      auto_alpha=True,
+      alpha=0.05,
+      tau=0.005,
+      gamma=0.99,
+      target_entropy_scale=1.0,
+      max_grad_norm=1.0,
+      policy_frequency=2,
+      n_steps=3,
+    ),
+    experiment_name="cartpole_sac",
+    save_interval=500,
+    num_steps_per_env=1,
+    max_iterations=10_000,
   )

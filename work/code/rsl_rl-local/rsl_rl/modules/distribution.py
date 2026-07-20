@@ -348,7 +348,7 @@ class TanhGaussianDistribution(Distribution):
         init_std: float = 1.0,
         std_range: tuple[float, float] = (1e-4, 10.0),
         std_type: str = "log",
-        action_range: tuple[float, float] = (-1.0, 1.0),
+        action_range: tuple[float | list[float] | torch.Tensor, float | list[float] | torch.Tensor] = (-1.0, 1.0),
     ) -> None:
         """Initialize the state-dependent base Gaussian and action transform."""
         super().__init__(output_dim)
@@ -358,16 +358,24 @@ class TanhGaussianDistribution(Distribution):
             raise ValueError(f"init_std must be positive, got {init_std}.")
         if std_range[0] <= 0.0 or std_range[1] <= std_range[0]:
             raise ValueError(f"Invalid standard-deviation range: {std_range}.")
-        if action_range[1] <= action_range[0]:
-            raise ValueError(f"Invalid action range: {action_range}.")
-
         self.init_std = init_std
         self.std_type = std_type
-        self.std_range = (max(std_range[0], 1e-6), std_range[1])
+        self.std_range = std_range
         self.log_std_range = (float(np.log(self.std_range[0])), float(np.log(self.std_range[1])))
         self.action_range = action_range
-        self._action_scale = (action_range[1] - action_range[0]) / 2.0
-        self._action_offset = (action_range[1] + action_range[0]) / 2.0
+        action_low = torch.as_tensor(action_range[0], dtype=torch.float)
+        action_high = torch.as_tensor(action_range[1], dtype=torch.float)
+        if action_low.numel() not in (1, output_dim) or action_high.numel() not in (1, output_dim):
+            raise ValueError(
+                f"Action bounds must be scalar or contain {output_dim} elements, got "
+                f"{action_low.numel()} and {action_high.numel()}."
+            )
+        action_low = action_low.expand(output_dim).clone()
+        action_high = action_high.expand(output_dim).clone()
+        if torch.any(action_high <= action_low):
+            raise ValueError(f"Invalid action range: {action_range}.")
+        self.register_buffer("_action_scale", (action_high - action_low) / 2.0)
+        self.register_buffer("_action_offset", (action_high + action_low) / 2.0)
 
         self._base_distribution: Normal | None = None
         self._distribution: TransformedDistribution | None = None
@@ -388,9 +396,10 @@ class TanhGaussianDistribution(Distribution):
         self._mean = mean
         self._std = std
         self._base_distribution = Normal(mean, std)
-        transforms = [TanhTransform(cache_size=1)]
-        if self.action_range != (-1.0, 1.0):
-            transforms.append(AffineTransform(loc=self._action_offset, scale=self._action_scale))
+        transforms = [
+            TanhTransform(cache_size=1),
+            AffineTransform(loc=self._action_offset, scale=self._action_scale),
+        ]
         self._distribution = TransformedDistribution(self._base_distribution, transforms)
 
     def sample(self, sample_shape: torch.Size = _EMPTY_SAMPLE_SHAPE) -> torch.Tensor:
@@ -429,7 +438,7 @@ class TanhGaussianDistribution(Distribution):
     @property
     def entropy(self) -> torch.Tensor:
         """Base entropy plus affine scaling (tanh term omitted)."""
-        affine_log_scale = np.log(abs(self._action_scale))
+        affine_log_scale = torch.log(self._action_scale.abs())
         return (self._base_distribution.entropy() + affine_log_scale).sum(dim=-1)  # type: ignore
 
     @property
@@ -608,10 +617,10 @@ class _BetaDeterministicOutput(nn.Module):
 class _TanhDeterministicOutput(nn.Module):
     """Exportable tanh and affine transform for deterministic actions."""
 
-    def __init__(self, action_scale: float, action_offset: float) -> None:
+    def __init__(self, action_scale: float | torch.Tensor, action_offset: float | torch.Tensor) -> None:
         super().__init__()
-        self.action_scale = action_scale
-        self.action_offset = action_offset
+        self.register_buffer("action_scale", torch.as_tensor(action_scale).clone())
+        self.register_buffer("action_offset", torch.as_tensor(action_offset).clone())
 
     def forward(self, mlp_output: torch.Tensor) -> torch.Tensor:
         mean = mlp_output[..., 0, :]
